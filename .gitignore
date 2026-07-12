@@ -245,3 +245,6 @@ $RECYCLE.BIN/
 *.lnk
 
 # End of https://www.toptal.com/developers/gitignore/api/python,jupyternotebooks,windows,visualstudiocode,linux
+
+# 논문 PDF (저작권)
+papers/
