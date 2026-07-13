@@ -110,3 +110,13 @@ class OnosClient:
         for flow in matches:
             self.delete_flow(flow["deviceId"], flow["id"])
         return len(matches)
+
+    def clear_app_flows(self, app_ids: list[str] | None = None) -> None:
+        """특정 앱(또는 기본 앱)이 설치한 flow 전체 삭제"""
+        if app_ids is None:
+            app_ids = ["org.onosproject.rest", "org.onosproject.fwd"]
+        for app_id in app_ids:
+            try:
+                self.request("DELETE", f"flows/application/{app_id}")
+            except Exception:
+                pass

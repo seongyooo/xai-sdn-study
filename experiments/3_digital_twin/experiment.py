@@ -52,7 +52,8 @@ def validate_with_static_validator(payload: dict) -> None:
 
 
 def ping_received(host, destination: str, count: int = 3) -> int:
-    output = host.cmd(f"ping -c {count} -W 1 {destination}")
+    output = host.cmd(f"ping -c {count} -W 2 {destination}")
+    print(f"  [ping] {host.name}→{destination}: {output.strip().splitlines()[-1] if output.strip() else 'no output'}")
     match = re.search(r"(\d+)\s+(?:packets\s+)?received", output)
     return int(match.group(1)) if match else 0
 
@@ -60,8 +61,9 @@ def ping_received(host, destination: str, count: int = 3) -> int:
 def ping_reachable(host, destination: str, attempts: int = 2) -> bool:
     # The first attempt may install a reactive forwarding path.
     received = 0
-    for _ in range(attempts):
+    for i in range(attempts):
         received = ping_received(host, destination)
+        print(f"  [ping_reachable] attempt {i+1}/{attempts}: received={received}")
         if received > 0:
             return True
     return False
@@ -79,6 +81,9 @@ def run_experiment(client: OnosClient, controller_ip: str, controller_port: int)
     client.wait_until_ready()
     client.activate_application("org.onosproject.openflow")
     client.activate_application("org.onosproject.fwd")
+    # 이전 실험의 잔여 flow 전체 정리
+    client.clear_app_flows()
+    print("  [setup] 이전 실험 잔여 flow 정리 완료")
 
     net = build_network(controller_ip, controller_port)
     cleaned = 0
@@ -88,6 +93,12 @@ def run_experiment(client: OnosClient, controller_ip: str, controller_port: int)
         time.sleep(3)
 
         h1, h2 = net.get("h1", "h2")
+
+        # fwd 앱이 reactive forwarding 경로를 학습하도록 baseline 핑으로 워밍업
+        ping_reachable(h1, "10.0.0.4")  # h1→h4 경로 학습
+        ping_reachable(h2, "10.0.0.3")  # h2→h3 경로 학습 (DROP 룰 배포 전)
+        time.sleep(1)
+
         checks = {
             "four_switches_discovered": EXPECTED_DEVICE_IDS <= client.available_device_ids(),
             "baseline_h1_to_h4": ping_reachable(h1, "10.0.0.4"),
@@ -96,10 +107,23 @@ def run_experiment(client: OnosClient, controller_ip: str, controller_port: int)
         # Remove stale test rules from an interrupted earlier run.
         client.delete_flows_by_priority(TEST_PRIORITY)
         client.deploy_flow_rules(DROP_RULE)
-        time.sleep(2)
+        time.sleep(5)  # DROP 룰 적용 + 기존 reactive flow 만료 대기
 
         checks["target_h1_to_h4_blocked"] = not ping_reachable(h1, "10.0.0.4", attempts=1)
-        checks["unrelated_h2_to_h3_reachable"] = ping_reachable(h2, "10.0.0.3")
+
+        # ONOS flow 수 확인
+        flows = client.flows()
+        print(f"  [debug] ONOS 현재 flow 수: {len(flows)}")
+        for f in flows:
+            print(f"    flow: deviceId={f.get('deviceId')} priority={f.get('priority')} state={f.get('state')}")
+
+        # h2→h3는 3홉 경로 (s1→s3→s4) — 홉마다 별도 packet-in 필요
+        print(f"  [debug] h2 IP={h2.IP()}, h3 IP check...")
+        h3 = net.get("h3")
+        print(f"  [debug] h3 IP={h3.IP()}")
+        h2.cmd("ping -c 2 -W 2 10.0.0.3")  # flow 설치 트리거
+        time.sleep(3)
+        checks["unrelated_h2_to_h3_reachable"] = ping_reachable(h2, "10.0.0.3", attempts=3)
 
         cleaned = client.delete_flows_by_priority(TEST_PRIORITY)
         time.sleep(2)
