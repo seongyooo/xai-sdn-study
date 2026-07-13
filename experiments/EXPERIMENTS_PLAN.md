@@ -122,7 +122,7 @@ NetIntent는 충돌 탐지만 함. 우리는 **왜 충돌하는지 자연어로 
 
 ## 실험 3 — Mininet Digital Twin
 
-**폴더**: `experiments/digital_twin/` (생성 예정)
+**폴더**: `experiments/3_digital_twin/` (준비 완료)
 
 **전제 조건**: Linux 또는 WSL2 환경 필요 (Mininet은 Windows 미지원)
 
