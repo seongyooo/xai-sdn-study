@@ -1,0 +1,9 @@
+services:
+  onos:
+    image: onosproject/onos:latest
+    container_name: xai-sdn-onos
+    ports:
+      - "6653:6653"
+      - "8181:8181"
+      - "8101:8101"
+    restart: unless-stopped

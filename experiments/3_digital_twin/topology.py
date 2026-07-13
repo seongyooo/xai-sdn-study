@@ -1,65 +1,59 @@
-"""
-Mininet 토폴로지: 스위치 1개 + 호스트 3개
-ONOS 컨트롤러(Docker)에 연결
+"""Mininet topology matching the IBNBench ONOS diamond topology."""
 
-실행 방법:
-  sudo python3 topology.py
-"""
-
-import sys
-import time
-from mininet.net import Mininet
-from mininet.node import RemoteController, OVSSwitch
-from mininet.link import TCLink
-from mininet.log import setLogLevel
-
-ONOS_IP   = "127.0.0.1"
-ONOS_PORT = 6653   # OpenFlow 포트
+from __future__ import annotations
 
 
-def create_topology():
-    setLogLevel("info")
+EXPECTED_DEVICE_IDS = {f"of:{number:016x}" for number in range(1, 5)}
 
-    net = Mininet(
-        controller=RemoteController,
+
+def build_network(controller_ip: str = "127.0.0.1", controller_port: int = 6653):
+    try:
+        from mininet.link import TCLink
+        from mininet.net import Mininet
+        from mininet.node import OVSSwitch, RemoteController
+        from mininet.topo import Topo
+    except ImportError as exc:
+        raise RuntimeError(
+            "Mininet is not installed. Run: sudo apt-get install mininet openvswitch-switch"
+        ) from exc
+
+    class DiamondTopo(Topo):
+        def build(self):
+            h1 = self.addHost("h1", ip="10.0.0.1/24")
+            h2 = self.addHost("h2", ip="10.0.0.2/24")
+            h3 = self.addHost("h3", ip="10.0.0.3/24")
+            h4 = self.addHost("h4", ip="10.0.0.4/24")
+
+            s1 = self.addSwitch(
+                "s1", dpid="0000000000000001", protocols="OpenFlow13"
+            )
+            s2 = self.addSwitch(
+                "s2", dpid="0000000000000002", protocols="OpenFlow13"
+            )
+            s3 = self.addSwitch(
+                "s3", dpid="0000000000000003", protocols="OpenFlow13"
+            )
+            s4 = self.addSwitch(
+                "s4", dpid="0000000000000004", protocols="OpenFlow13"
+            )
+
+            self.addLink(h1, s1, port2=3)
+            self.addLink(h2, s1, port2=4)
+            self.addLink(h3, s4, port2=3)
+            self.addLink(h4, s4, port2=4)
+            self.addLink(s1, s2, port1=1, port2=1, cls=TCLink, bw=1)
+            self.addLink(s2, s4, port1=2, port2=1, cls=TCLink, bw=1)
+            self.addLink(s1, s3, port1=2, port2=1, cls=TCLink, bw=10)
+            self.addLink(s3, s4, port1=2, port2=2, cls=TCLink, bw=10)
+
+    controller = RemoteController(
+        "c0", ip=controller_ip, port=controller_port, protocols="tcp"
+    )
+    return Mininet(
+        topo=DiamondTopo(),
+        controller=controller,
         switch=OVSSwitch,
         link=TCLink,
         autoSetMacs=True,
+        autoStaticArp=True,
     )
-
-    # 컨트롤러 (ONOS Docker)
-    c0 = net.addController(
-        "c0",
-        controller=RemoteController,
-        ip=ONOS_IP,
-        port=ONOS_PORT,
-    )
-
-    # 스위치 (DPID → ONOS deviceId: of:0000000000000001, OpenFlow 1.3)
-    s1 = net.addSwitch("s1", dpid="0000000000000001",
-                       protocols="OpenFlow13")
-
-    # 호스트
-    h1 = net.addHost("h1", ip="10.0.0.1/24", mac="00:00:00:00:00:01")
-    h2 = net.addHost("h2", ip="10.0.0.2/24", mac="00:00:00:00:00:02")
-    h3 = net.addHost("h3", ip="10.0.0.3/24", mac="00:00:00:00:00:03")
-
-    # 링크
-    net.addLink(h1, s1, port2=1)
-    net.addLink(h2, s1, port2=2)
-    net.addLink(h3, s1, port2=3)
-
-    net.start()
-    print("\n토폴로지 시작됨. ONOS 연결 대기 중 (10초)...")
-    time.sleep(10)
-
-    return net, s1, h1, h2, h3
-
-
-if __name__ == "__main__":
-    net, s1, h1, h2, h3 = create_topology()
-    print(f"\nh1 IP: {h1.IP()}, h2 IP: {h2.IP()}, h3 IP: {h3.IP()}")
-    print("Mininet CLI 진입 (exit로 종료)")
-    from mininet.cli import CLI
-    CLI(net)
-    net.stop()
