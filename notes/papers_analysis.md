@@ -61,8 +61,9 @@
 | 6G Orchestration (Martins) | 6G 서비스 레벨, XAI 없음 | SDN FlowRule 레벨 + XAI |
 | Water DT+RAG (Fasha) | 수도 도메인, XAI 없음 | SDN 도메인 특화 + XAI |
 | Survey (Hong) | 서베이만, 구현 없음 | 실제 구현 + 실험 |
+| **NetIntent (Hossain)** | **RAG 없음, DT 없음, XAI 없음** | **RAG + Mininet DT + XAI 추가** |
 
-**핵심 차별점**: **"SDN FlowRule 생성 + Static Validator + Digital Twin 사전 검증 + XAI 설명"의 End-to-End 파이프라인**을 모두 통합한 연구는 없음.
+**핵심 차별점**: **"SDN FlowRule 생성 + RAG + Static Validator + Digital Twin 사전 검증 + XAI 설명"의 End-to-End 파이프라인**을 모두 통합한 연구는 없음. NetIntent가 가장 유사하나 RAG/DT/XAI 부재.
 
 ---
 
@@ -76,6 +77,18 @@
 | 2602.13672 LEAD-Drift (ICC 2026) | Intent Drift → 지도학습 + SHAP XAI, 7.3분 조기 탐지 | IBN Assurance 레이어, SHAP 인용 |
 | 2602.05279 Hallucination-Resistant (NOMS 2026) | 일관성 검사 + DT 피드백 + ICL 루프, -30% 복구 시간 | 환각 방지 루프 이론적 근거 |
 | 2509.22834 LLM+Formal Methods (AICCSA 2025) | CFG 구조 검증 + PDDL 계획 + Optical RAG | Static Validator 설계, 환각 구조적 탐지 |
+
+---
+
+---
+
+## 3차 수집 논문
+
+| 논문 | 핵심 기여 | 우리 연구 활용 |
+|------|-----------|----------------|
+| NetIntent (Hossain, IEEE OJCOMS 2025) | ⚠️ Intent2Flow-ONOS + FlowConflict-ONOS + 33개 LLM 벤치마크. IBNBench 공개 | **가장 중요한 선행 연구** — IBNBench 데이터셋 평가에 사용, XAI+DT로 차별화 |
+| DT + ZTN (IIIT Bangalore, FNWF 2025) | DT + BiLSTM + Q-learning 대역폭 예측, LLM 없음 | DT What-if 시나리오 개념 인용 |
+| NIST XAI 4원칙 (NISTIR 8312, 2021) | Explanation / Meaningful / Explanation Accuracy / Knowledge Limits | XAI 모듈 이론 기반, 논문 권위 보강 |
 
 ---
 

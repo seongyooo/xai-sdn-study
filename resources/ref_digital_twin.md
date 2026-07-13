@@ -58,3 +58,33 @@ VNF 배포 자동화 LLM 에이전트에서 **Kubernetes 기반 Network Digital 
 - **RAG 설계 참고**: FAISS 기반 RAG → 우리의 FlowRule 문서/표준 RAG 구현에 참고
 
 ---
+
+## Paper 3
+
+**제목:** Digital Twin Assisted Proactive Management in Zero Touch Networks
+**저자:** Tamizhelakkiya K, Dibakar Das, Komal Sharma, Jyotsna Bapat, Debabrata Das (IIIT Bangalore + Toshiba)
+**출처 (학회/저널):** IEEE FNWF 2025 (preprint arXiv:2508.17941)
+**연도:** 2025
+**링크:** https://arxiv.org/abs/2508.17941
+
+**요약:**
+Zero Touch Network(ZTN)에서 Digital Twin을 활용한 선제적 대역폭 관리 프레임워크. Few-Shot Learning 기반 메모리 증강 BiLSTM으로 네트워크 상태 예측 → Q-learning으로 최적 행동(트래픽 쉐이핑 등) 결정. LLM 없음, 전통 ML 기반.
+
+**핵심 내용:**
+- **3계층 아키텍처**: 사용자 → DT 기반 ZTN 폐쇄 루프 제어 → 물리 네트워크
+- **Digital Twin 역할**:
+  - 실시간 네트워크 상태 모니터링
+  - What-if 시나리오 시뮬레이션 (배포 전 가상 검증)
+  - 예측 분석 (대역폭 변화 예측)
+- **FSL BiLSTM**: 학습된 상태 + 새 상태를 메모리 증강으로 통합 → 대역폭 예측
+- **Q-learning**: 예측 상태 기반 최적 행동(트래픽 쉐이핑) 결정 → QoS 보장
+- **3가지 시나리오 평가**: 정상 ZTN 운영 / DT what-if / DT가 모르는 새 네트워크 상태
+- **결과**: DT 지원 ZTN이 DT 없는 기준 대비 우수한 QoS 성능
+
+**내 연구와의 관련성:**
+- **DT What-if 시나리오 = 우리의 핵심**: 실제 배포 전 DT에서 FlowRule 효과를 시뮬레이션하는 아이디어와 동일. "DT가 배포 전 검증 환경으로 기능한다"는 개념 인용 가능
+- **ZTN 자동화 맥락**: Zero Touch = 사람 개입 최소화 → 우리의 LLM 기반 자동 정책 생성과 동일한 방향성
+- **차별화**: 이 논문은 LLM 없음 + SDN FlowRule 아님 + XAI 없음 → 우리가 LLM+RAG+XAI를 추가한 SDN 특화 버전
+- **Related Work 배경**: ZTN + DT 자동화의 선행 연구로 인용하며 "LLM을 추가하면 자연어 인터페이스가 가능해진다"는 논증에 활용
+
+---

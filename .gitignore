@@ -248,3 +248,13 @@ $RECYCLE.BIN/
 
 # 논문 PDF (저작권)
 papers/
+
+# 실험 결과 파일 (대용량, 재현 가능)
+experiments/**/results/
+experiments/**/__pycache__/
+
+# IBNBench 데이터셋 (별도 git 저장소, README에 clone 방법 명시)
+experiments/**/NetIntent/
+
+# Claude 메모리
+.claude/
