@@ -24,10 +24,18 @@ def build_network(controller_ip: str = "127.0.0.1", controller_port: int = 6653)
             h3 = self.addHost("h3", ip="10.0.0.3/24")
             h4 = self.addHost("h4", ip="10.0.0.4/24")
 
-            s1 = self.addSwitch("s1", dpid="0000000000000001")
-            s2 = self.addSwitch("s2", dpid="0000000000000002")
-            s3 = self.addSwitch("s3", dpid="0000000000000003")
-            s4 = self.addSwitch("s4", dpid="0000000000000004")
+            s1 = self.addSwitch(
+                "s1", dpid="0000000000000001", protocols="OpenFlow13"
+            )
+            s2 = self.addSwitch(
+                "s2", dpid="0000000000000002", protocols="OpenFlow13"
+            )
+            s3 = self.addSwitch(
+                "s3", dpid="0000000000000003", protocols="OpenFlow13"
+            )
+            s4 = self.addSwitch(
+                "s4", dpid="0000000000000004", protocols="OpenFlow13"
+            )
 
             self.addLink(h1, s1, port2=3)
             self.addLink(h2, s1, port2=4)

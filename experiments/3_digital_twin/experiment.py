@@ -77,6 +77,7 @@ def run_experiment(client: OnosClient, controller_ip: str, controller_port: int)
 
     validate_with_static_validator(DROP_RULE)
     client.wait_until_ready()
+    client.activate_application("org.onosproject.openflow")
     client.activate_application("org.onosproject.fwd")
 
     net = build_network(controller_ip, controller_port)
