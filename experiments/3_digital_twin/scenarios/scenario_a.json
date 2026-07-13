@@ -1,0 +1,23 @@
+{
+  "_comment": "시나리오 A: h1→h2 트래픽을 포트 2로 포워딩 (OUTPUT)",
+  "_intent": "Forward all traffic from h1 to h2 via port 2",
+  "flows": [
+    {
+      "priority": 200,
+      "timeout": 0,
+      "isPermanent": true,
+      "deviceId": "of:0000000000000001",
+      "selector": {
+        "criteria": [
+          { "type": "ETH_TYPE", "ethType": "0x800" },
+          { "type": "IPV4_DST", "ip": "10.0.0.2/32" }
+        ]
+      },
+      "treatment": {
+        "instructions": [
+          { "type": "OUTPUT", "port": "2" }
+        ]
+      }
+    }
+  ]
+}
