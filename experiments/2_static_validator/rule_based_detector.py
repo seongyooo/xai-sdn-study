@@ -105,11 +105,12 @@ def _field_value(c: dict, ctype: str):
     elif ctype == "TCP_DST":
         return str(c.get("tcpPort", ""))
     elif ctype == "UDP_DST":
-        return str(c.get("udpPort", ""))
+        # 데이터셋에 UDP_DST인데 tcpPort 키를 쓰는 경우가 있음 (데이터 오류 방어)
+        return str(c.get("udpPort", "") or c.get("tcpPort", ""))
     elif ctype == "TCP_SRC":
         return str(c.get("tcpPort", ""))
     elif ctype == "UDP_SRC":
-        return str(c.get("udpPort", ""))
+        return str(c.get("udpPort", "") or c.get("tcpPort", ""))
     elif ctype == "IN_PORT":
         return str(c.get("port", ""))
     elif ctype == "VLAN_VID":
@@ -219,6 +220,7 @@ def detect_conflict_rule_based(rule1_raw, rule2_raw) -> dict:
         }
 
     # overlap 있음 → 충돌 유형 분류
+    tcp_udp_note = ""
 
     # ── 2단계: match 완전 동일 여부 ───────────────────────
     match_equal = criteria_equal(c1, c2)
@@ -249,13 +251,11 @@ def detect_conflict_rule_based(rule1_raw, rule2_raw) -> dict:
                 "reason": f"priority {high_p}이 priority {low_p}의 match를 완전히 포함하여 하위 규칙이 도달 불가"
             }
 
-    # Generalization: match 포함 관계 + action 동일
     if not action_equal and (c1_sub_c2 or c2_sub_c1):
-        specific, general = (f1, f2) if c1_sub_c2 else (f2, f1)
         return {
             "conflicting": True,
             "conflict_type": "Imbrication",
-            "reason": f"한 규칙이 다른 규칙의 match 부분집합 (더 구체적인 규칙이 일반 규칙과 겹침)"
+            "reason": f"한 규칙이 다른 규칙의 match 부분집합 (더 구체적인 규칙이 일반 규칙과 겹침){tcp_udp_note}"
         }
 
     if action_equal and (c1_sub_c2 or c2_sub_c1):
@@ -270,7 +270,7 @@ def detect_conflict_rule_based(rule1_raw, rule2_raw) -> dict:
         return {
             "conflicting": True,
             "conflict_type": "Correlation",
-            "reason": f"match가 겹치지만 서로 다른 action 수행 (priority {p1} vs {p2})"
+            "reason": f"match가 겹치지만 서로 다른 action 수행 (priority {p1} vs {p2}){tcp_udp_note}"
         }
 
     # match 겹침 + action 동일 + match 다름 → 잠재적 Redundancy
