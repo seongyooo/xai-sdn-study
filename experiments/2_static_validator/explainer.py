@@ -6,11 +6,16 @@ NetIntent는 충돌 탐지만 함 → 우리는 왜 충돌하는지 설명까지
 import os
 import json
 import time
-from google import genai
-from google.genai import types
+import requests
+from pathlib import Path
+from dotenv import load_dotenv
 
-client = genai.Client(api_key=os.environ.get("GOOGLE_API_KEY"))
-MODEL = "gemini-3.1-flash-lite"
+load_dotenv(Path(__file__).resolve().parents[2] / ".env")
+
+# ── LLM (Ollama public endpoint) ────────────────────────────
+LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "https://ollama.jangmyun.dev/v1")
+LLM_MODEL    = os.environ.get("LLM_MODEL", "qwen3:8b")
+LLM_HEADERS  = {"Content-Type": "application/json", "Authorization": f"Bearer {os.environ.get('LLM_API_KEY', 'ollama')}"}
 
 EXPLANATION_PROMPT = """You are an SDN network expert explaining FlowRule conflicts to network operators.
 
@@ -44,25 +49,39 @@ Explain this conflict in detail."""
 
     for attempt in range(max_retries):
         try:
-            time.sleep(2)
-            resp = client.models.generate_content(
-                model=MODEL,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction=EXPLANATION_PROMPT,
-                    temperature=0.3,
-                    response_mime_type="application/json",
-                ),
+            resp = requests.post(
+                f"{LLM_BASE_URL}/chat/completions",
+                headers=LLM_HEADERS,
+                json={
+                    "model": LLM_MODEL,
+                    "messages": [
+                        {"role": "system", "content": EXPLANATION_PROMPT},
+                        {"role": "user",   "content": prompt},
+                    ],
+                    "temperature": 0.3,
+                    "stream": True,
+                    "response_format": {"type": "json_object"},
+                },
+                timeout=300,
+                stream=True,
             )
-            return json.loads(resp.text)
+            resp.raise_for_status()
+            content = ""
+            for line in resp.iter_lines():
+                if not line:
+                    continue
+                line = line.decode("utf-8") if isinstance(line, bytes) else line
+                if line.startswith("data: "):
+                    data = line[6:]
+                    if data.strip() == "[DONE]":
+                        break
+                    chunk = json.loads(data)
+                    content += chunk["choices"][0]["delta"].get("content", "")
+            return json.loads(content)
         except Exception as e:
             err = str(e)
             print(f"  [attempt {attempt+1}] Error: {err[:80]}")
-            if "429" in err:
-                wait = 15 * (attempt + 1)
-                time.sleep(wait)
-            else:
-                time.sleep(2)
+            time.sleep(2)
 
     return {"why": "설명 생성 실패", "impact": "", "remedy": ""}
 

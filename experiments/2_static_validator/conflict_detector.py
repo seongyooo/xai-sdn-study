@@ -7,10 +7,13 @@ import os
 import ast
 import json
 import time
+import requests
 import pandas as pd
-from google import genai
-from google.genai import types
+from pathlib import Path
+from dotenv import load_dotenv
 from sklearn.metrics import classification_report, confusion_matrix
+
+load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 # ── 경로 설정 ──────────────────────────────────────────────
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -19,8 +22,10 @@ DATASET_PATH = os.path.join(
     "GitHub NetIntent", "Datasets", "FlowConflict-ONOS.csv"
 )
 
-client = genai.Client(api_key=os.environ.get("GOOGLE_API_KEY"))
-MODEL = "gemini-3.1-flash-lite"
+# ── LLM (Ollama public endpoint) ────────────────────────────
+LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "https://ollama.jangmyun.dev/v1")
+LLM_MODEL    = os.environ.get("LLM_MODEL", "qwen3:8b")
+LLM_HEADERS  = {"Content-Type": "application/json", "Authorization": f"Bearer {os.environ.get('LLM_API_KEY', 'ollama')}"}
 
 # ── 프롬프트 ───────────────────────────────────────────────
 CONFLICT_DETECTION_PROMPT = """You are an expert in SDN (Software-Defined Networking) and ONOS controller flow rules.
@@ -74,27 +79,39 @@ Analyze if these two ONOS FlowRules conflict."""
 
     for attempt in range(max_retries):
         try:
-            time.sleep(2)
-            resp = client.models.generate_content(
-                model=MODEL,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction=CONFLICT_DETECTION_PROMPT,
-                    temperature=0.1,
-                    response_mime_type="application/json",
-                ),
+            resp = requests.post(
+                f"{LLM_BASE_URL}/chat/completions",
+                headers=LLM_HEADERS,
+                json={
+                    "model": LLM_MODEL,
+                    "messages": [
+                        {"role": "system", "content": CONFLICT_DETECTION_PROMPT},
+                        {"role": "user",   "content": prompt},
+                    ],
+                    "temperature": 0.1,
+                    "stream": True,
+                    "response_format": {"type": "json_object"},
+                },
+                timeout=300,
+                stream=True,
             )
-            result = json.loads(resp.text)
-            return result
+            resp.raise_for_status()
+            content = ""
+            for line in resp.iter_lines():
+                if not line:
+                    continue
+                line = line.decode("utf-8") if isinstance(line, bytes) else line
+                if line.startswith("data: "):
+                    data = line[6:]
+                    if data.strip() == "[DONE]":
+                        break
+                    chunk = json.loads(data)
+                    content += chunk["choices"][0]["delta"].get("content", "")
+            return json.loads(content)
         except Exception as e:
             err = str(e)
             print(f"    [attempt {attempt+1}] Error: {err[:80]}")
-            if "429" in err:
-                wait = 15 * (attempt + 1)
-                print(f"    Rate limited, waiting {wait}s...")
-                time.sleep(wait)
-            else:
-                time.sleep(2)
+            time.sleep(2)
 
     return {"conflicting": None, "conflict_type": None, "reason": "API 오류"}
 
@@ -113,14 +130,15 @@ def run_conflict_detection(sample_size: int = None):
     df["Conflicting_norm"] = df["Conflicting"].apply(normalize_label)
 
     if sample_size:
-        df = df.head(sample_size)
-        print(f"샘플 {sample_size}개만 실행 (전체: 74개)\n")
+        df = df.sample(n=min(sample_size, len(df)), random_state=42).reset_index(drop=True)
+        print(f"샘플 {len(df)}개만 실행 (전체: 74개, random_state=42)\n")
     else:
         print(f"전체 {len(df)}개 실행\n")
 
     y_true = []  # 정답 레이블
     y_pred = []  # 예측 레이블
     details = []
+    api_errors = 0  # API 실패로 평가에서 제외된 샘플 수
 
     for idx, row in df.iterrows():
         rule1 = parse_flowrule(row["ONOS Flow Rule 1"])
@@ -140,7 +158,9 @@ def run_conflict_detection(sample_size: int = None):
         reason = result.get("reason", "")
 
         if pred_conflicting is None:
-            print("API 오류 - 스킵")
+            # API 실패: 정확도 분모에서 제외하되 따로 카운트
+            api_errors += 1
+            print(f"API 오류 — 평가 제외 (누적 {api_errors}건)")
             continue
 
         pred_label = "yes" if pred_conflicting else "no"
@@ -161,16 +181,24 @@ def run_conflict_detection(sample_size: int = None):
         })
 
     # 평가 지표 계산
+    evaluated = len(y_true)
+    total_attempted = evaluated + api_errors
+
     print("\n" + "="*50)
     print("평가 결과")
     print("="*50)
+    if api_errors:
+        print(f"⚠  API 오류로 제외된 샘플: {api_errors}/{total_attempted}건 "
+              f"(정확도는 {evaluated}건 기준)")
     print(classification_report(y_true, y_pred, target_names=["no", "yes"]))
 
-    accuracy = sum(1 for a, b in zip(y_true, y_pred) if a == b) / len(y_true) * 100
-    print(f"Accuracy: {accuracy:.1f}%")
+    accuracy = sum(1 for a, b in zip(y_true, y_pred) if a == b) / evaluated * 100
+    print(f"Accuracy: {accuracy:.1f}%  (평가 샘플 {evaluated}/{total_attempted})")
 
     return {
         "accuracy": round(accuracy, 1),
+        "evaluated": evaluated,
+        "api_errors": api_errors,
         "y_true": y_true,
         "y_pred": y_pred,
         "details": details,

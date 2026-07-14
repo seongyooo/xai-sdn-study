@@ -10,6 +10,7 @@ import sys
 import json
 import time
 import ast
+import argparse
 import pandas as pd
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -24,12 +25,20 @@ os.makedirs(RESULTS_DIR, exist_ok=True)
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model", default=os.environ.get("LLM_MODEL", "qwen3:8b"),
+                        help="LLM model name (e.g. qwen3:8b, gemma4:e4b)")
+    args = parser.parse_args()
+    os.environ["LLM_MODEL"] = args.model
+    print(f"[Model: {args.model}]")
+
     run_steps = os.environ.get("RUN_STEPS", "1,2,3")
     steps = [s.strip() for s in run_steps.split(",")]
     # 빠른 테스트용: SAMPLE_SIZE 환경변수로 개수 제한 가능
     sample_size = int(os.environ.get("SAMPLE_SIZE", "0")) or None
 
     all_results = {}
+    model_tag = args.model.replace(":", "-")
     timestamp = int(time.time())
 
     # ── Step 1: 스키마 검증 ──────────────────────────────────
@@ -39,7 +48,7 @@ def main():
         results_1 = run_schema_validation_test()
         all_results["schema_validation"] = results_1
 
-        path = os.path.join(RESULTS_DIR, f"step1_schema_{timestamp}.json")
+        path = os.path.join(RESULTS_DIR, f"step1_schema_{model_tag}_{timestamp}.json")
         with open(path, "w", encoding="utf-8") as f:
             json.dump(results_1, f, ensure_ascii=False, indent=2)
         print(f"\n결과 저장: {path}")
@@ -55,7 +64,7 @@ def main():
             "details": results_2["details"],
         }
 
-        path = os.path.join(RESULTS_DIR, f"step2_conflict_{timestamp}.json")
+        path = os.path.join(RESULTS_DIR, f"step2_conflict_{model_tag}_{timestamp}.json")
         with open(path, "w", encoding="utf-8") as f:
             json.dump(all_results["conflict_detection"], f, ensure_ascii=False, indent=2)
         print(f"\n결과 저장: {path}")
@@ -86,7 +95,7 @@ def main():
         results_3 = run_explanation_demo(demo_cases)
         all_results["conflict_explanation"] = results_3
 
-        path = os.path.join(RESULTS_DIR, f"step3_explanation_{timestamp}.json")
+        path = os.path.join(RESULTS_DIR, f"step3_explanation_{model_tag}_{timestamp}.json")
         with open(path, "w", encoding="utf-8") as f:
             json.dump(results_3, f, ensure_ascii=False, indent=2)
         print(f"\n결과 저장: {path}")

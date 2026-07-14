@@ -1,0 +1,40 @@
+{
+  "_comment": "시나리오 C: h1→h2 TCP/80만 포트 2로 포워딩, 나머지 DROP",
+  "_intent": "Forward only TCP port 80 traffic from h1 to h2, drop everything else",
+  "flows": [
+    {
+      "priority": 400,
+      "timeout": 0,
+      "isPermanent": true,
+      "deviceId": "of:0000000000000001",
+      "selector": {
+        "criteria": [
+          { "type": "ETH_TYPE", "ethType": "0x800" },
+          { "type": "IP_PROTO", "protocol": 6 },
+          { "type": "IPV4_DST", "ip": "10.0.0.2/32" },
+          { "type": "TCP_DST", "tcpPort": 80 }
+        ]
+      },
+      "treatment": {
+        "instructions": [
+          { "type": "OUTPUT", "port": "2" }
+        ]
+      }
+    },
+    {
+      "priority": 100,
+      "timeout": 0,
+      "isPermanent": true,
+      "deviceId": "of:0000000000000001",
+      "selector": {
+        "criteria": [
+          { "type": "ETH_TYPE", "ethType": "0x800" },
+          { "type": "IPV4_DST", "ip": "10.0.0.2/32" }
+        ]
+      },
+      "treatment": {
+        "instructions": []
+      }
+    }
+  ]
+}

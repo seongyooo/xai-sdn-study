@@ -125,6 +125,25 @@ def criteria_overlap(c1: dict, c2: dict) -> bool:
     """
     common_types = set(c1.keys()) & set(c2.keys())
 
+    # 공통 필드가 없는 경우: ETH_TYPE 기반 의미적 호환성 체크
+    # 공통 필드가 없다고 무조건 overlap=True로 반환하면 False Positive 발생.
+    # 예) ARP 규칙(ETH_TYPE=0x806)과 IPV4_SRC 규칙은 같은 패킷을 절대 매치 못함.
+    if not common_types:
+        ip_fields = {"IPV4_SRC", "IPV4_DST", "IP_PROTO", "TCP_SRC", "TCP_DST", "UDP_SRC", "UDP_DST"}
+        eth_c1 = _field_value(c1["ETH_TYPE"], "ETH_TYPE") if "ETH_TYPE" in c1 else None
+        eth_c2 = _field_value(c2["ETH_TYPE"], "ETH_TYPE") if "ETH_TYPE" in c2 else None
+        # ARP(0x806) 규칙은 IP 레벨 필드와 겹칠 수 없음
+        if eth_c1 == "0x806" and ip_fields & set(c2.keys()):
+            return False
+        if eth_c2 == "0x806" and ip_fields & set(c1.keys()):
+            return False
+        # IPv6(0x86dd) 규칙은 IPv4 주소 필드와 겹칠 수 없음
+        if eth_c1 == "0x86dd" and ip_fields & set(c2.keys()):
+            return False
+        if eth_c2 == "0x86dd" and ip_fields & set(c1.keys()):
+            return False
+        return True
+
     for ctype in common_types:
         v1 = c1[ctype]
         v2 = c2[ctype]

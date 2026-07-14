@@ -1,0 +1,21 @@
+{
+  "_comment": "시나리오 B: h3(10.0.0.3)에서 오는 모든 트래픽 차단 (DROP)",
+  "_intent": "Block all traffic from h3",
+  "flows": [
+    {
+      "priority": 300,
+      "timeout": 0,
+      "isPermanent": true,
+      "deviceId": "of:0000000000000001",
+      "selector": {
+        "criteria": [
+          { "type": "ETH_TYPE", "ethType": "0x800" },
+          { "type": "IPV4_SRC", "ip": "10.0.0.3/32" }
+        ]
+      },
+      "treatment": {
+        "instructions": []
+      }
+    }
+  ]
+}
