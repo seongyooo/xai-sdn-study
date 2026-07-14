@@ -4,10 +4,15 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import time
+from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+
+from dotenv import load_dotenv
+load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 
 class OnosError(RuntimeError):
@@ -17,9 +22,9 @@ class OnosError(RuntimeError):
 class OnosClient:
     def __init__(
         self,
-        base_url: str = "http://127.0.0.1:8181/onos/v1",
-        username: str = "onos",
-        password: str = "rocks",
+        base_url: str = os.environ.get("ONOS_URL", "http://127.0.0.1:8181/onos/v1"),
+        username: str = os.environ.get("ONOS_USER", "onos"),
+        password: str = os.environ.get("ONOS_PASSWORD", "rocks"),
         timeout: float = 5.0,
     ) -> None:
         self.base_url = base_url.rstrip("/")

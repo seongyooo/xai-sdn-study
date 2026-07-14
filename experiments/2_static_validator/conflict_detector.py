@@ -7,10 +7,13 @@ import os
 import ast
 import json
 import time
+import requests
 import pandas as pd
-from google import genai
-from google.genai import types
+from pathlib import Path
+from dotenv import load_dotenv
 from sklearn.metrics import classification_report, confusion_matrix
+
+load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 # ── 경로 설정 ──────────────────────────────────────────────
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -19,8 +22,10 @@ DATASET_PATH = os.path.join(
     "GitHub NetIntent", "Datasets", "FlowConflict-ONOS.csv"
 )
 
-client = genai.Client(api_key=os.environ.get("GOOGLE_API_KEY"))
-MODEL = "gemini-3.1-flash-lite"
+# ── LLM (Ollama public endpoint) ────────────────────────────
+LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "https://ollama.jangmyun.dev/v1")
+LLM_MODEL    = os.environ.get("LLM_MODEL", "qwen3:8b")
+LLM_HEADERS  = {"Content-Type": "application/json", "Authorization": f"Bearer {os.environ.get('LLM_API_KEY', 'ollama')}"}
 
 # ── 프롬프트 ───────────────────────────────────────────────
 CONFLICT_DETECTION_PROMPT = """You are an expert in SDN (Software-Defined Networking) and ONOS controller flow rules.
@@ -74,27 +79,39 @@ Analyze if these two ONOS FlowRules conflict."""
 
     for attempt in range(max_retries):
         try:
-            time.sleep(2)
-            resp = client.models.generate_content(
-                model=MODEL,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction=CONFLICT_DETECTION_PROMPT,
-                    temperature=0.1,
-                    response_mime_type="application/json",
-                ),
+            resp = requests.post(
+                f"{LLM_BASE_URL}/chat/completions",
+                headers=LLM_HEADERS,
+                json={
+                    "model": LLM_MODEL,
+                    "messages": [
+                        {"role": "system", "content": CONFLICT_DETECTION_PROMPT},
+                        {"role": "user",   "content": prompt},
+                    ],
+                    "temperature": 0.1,
+                    "stream": True,
+                    "response_format": {"type": "json_object"},
+                },
+                timeout=300,
+                stream=True,
             )
-            result = json.loads(resp.text)
-            return result
+            resp.raise_for_status()
+            content = ""
+            for line in resp.iter_lines():
+                if not line:
+                    continue
+                line = line.decode("utf-8") if isinstance(line, bytes) else line
+                if line.startswith("data: "):
+                    data = line[6:]
+                    if data.strip() == "[DONE]":
+                        break
+                    chunk = json.loads(data)
+                    content += chunk["choices"][0]["delta"].get("content", "")
+            return json.loads(content)
         except Exception as e:
             err = str(e)
             print(f"    [attempt {attempt+1}] Error: {err[:80]}")
-            if "429" in err:
-                wait = 15 * (attempt + 1)
-                print(f"    Rate limited, waiting {wait}s...")
-                time.sleep(wait)
-            else:
-                time.sleep(2)
+            time.sleep(2)
 
     return {"conflicting": None, "conflict_type": None, "reason": "API 오류"}
 

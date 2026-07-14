@@ -11,10 +11,14 @@ import json
 import copy
 import re
 import time
+import argparse
+import requests
 import pandas as pd
+from pathlib import Path
+from dotenv import load_dotenv
 from sklearn.model_selection import train_test_split
-from google import genai
-from google.genai import types
+
+load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 # ── 경로 설정 ──────────────────────────────────────────────
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -25,9 +29,11 @@ DATASET_PATH = os.path.join(
 RESULTS_DIR = os.path.join(BASE_DIR, "results")
 os.makedirs(RESULTS_DIR, exist_ok=True)
 
-# ── Gemini 클라이언트 ───────────────────────────────────────
-client = genai.Client(api_key=os.environ.get("GOOGLE_API_KEY"))
-MODEL = "gemini-3.1-flash-lite"   # 무료 티어 지원. gemini-3.1-flash-lite 사용
+# ── LLM (Ollama public endpoint) ────────────────────────────
+LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "https://ollama.jangmyun.dev/v1")
+LLM_MODEL    = os.environ.get("LLM_MODEL", "qwen3:8b")
+EMBED_MODEL  = os.environ.get("EMBED_MODEL", "nomic-embed-text")
+LLM_HEADERS  = {"Content-Type": "application/json", "Authorization": f"Bearer {os.environ.get('LLM_API_KEY', 'ollama')}"}
 
 # ── NetIntent 프롬프트 (원문 그대로) ────────────────────────
 SYSTEM_PROMPT = """Your task is to transform natural language network intents into JSON-formatted network policies compatible with the ONOS SDN controller.
@@ -115,13 +121,22 @@ def compare_onos_json(expected_json, actual_json):
     actual_json = copy.deepcopy(actual_json)
 
     def clean_json(j):
-        for flow in j.get("flows", []):
-            for f in ignore_fields:
-                flow.pop(f, None)
+        flows = j.get("flows", [])
+        for i, flow in enumerate(flows):
+            if isinstance(flow, str):
+                try:
+                    flows[i] = flow = json.loads(flow)
+                except Exception:
+                    continue
+            if isinstance(flow, dict):
+                for f in ignore_fields:
+                    flow.pop(f, None)
         return j
 
     def normalize_json(j):
         for flow in j.get("flows", []):
+            if not isinstance(flow, dict):
+                continue
             for key in ["priority", "timeout"]:
                 if key in flow and isinstance(flow[key], str) and flow[key].isdigit():
                     flow[key] = int(flow[key])
@@ -178,27 +193,39 @@ def extract_switch_id(intent: str) -> str:
 def call_llm(system_prompt: str, user_prompt: str, max_retries: int = 5) -> dict | None:
     for attempt in range(max_retries):
         try:
-            time.sleep(2)  # 무료 티어 rate limit 방지 (최대 ~30 RPM)
-            resp = client.models.generate_content(
-                model=MODEL,
-                contents=user_prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction=system_prompt,
-                    temperature=0.2,
-                    response_mime_type="application/json",
-                ),
+            resp = requests.post(
+                f"{LLM_BASE_URL}/chat/completions",
+                headers=LLM_HEADERS,
+                json={
+                    "model": LLM_MODEL,
+                    "messages": [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user",   "content": user_prompt},
+                    ],
+                    "temperature": 0.2,
+                    "stream": True,
+                    "response_format": {"type": "json_object"},
+                },
+                timeout=300,
+                stream=True,
             )
-            return json.loads(resp.text)
+            resp.raise_for_status()
+            content = ""
+            for line in resp.iter_lines():
+                if not line:
+                    continue
+                line = line.decode("utf-8") if isinstance(line, bytes) else line
+                if line.startswith("data: "):
+                    data = line[6:]
+                    if data.strip() == "[DONE]":
+                        break
+                    chunk = json.loads(data)
+                    content += chunk["choices"][0]["delta"].get("content", "")
+            return json.loads(content)
         except Exception as e:
             err = str(e)
             print(f"  [attempt {attempt+1}] Error: {err[:80]}")
-            # 429 rate limit이면 더 오래 대기
-            if "429" in err:
-                wait = 10 * (attempt + 1)
-                print(f"  Rate limited, waiting {wait}s...")
-                time.sleep(wait)
-            else:
-                time.sleep(2)
+            time.sleep(2)
     return None
 
 
@@ -256,8 +283,14 @@ def run_few_shot(trainset: pd.DataFrame, testset: pd.DataFrame, k: int = 3) -> d
             continue
 
         device_id = extract_switch_id(intent)
-        for flow in actual.get("flows", []):
-            flow["deviceId"] = device_id
+        for i, flow in enumerate(actual.get("flows", [])):
+            if isinstance(flow, str):
+                try:
+                    actual["flows"][i] = flow = json.loads(flow)
+                except Exception:
+                    continue
+            if isinstance(flow, dict):
+                flow["deviceId"] = device_id
 
         ok = compare_onos_json(expected, actual)
         if ok:
@@ -271,23 +304,30 @@ def run_few_shot(trainset: pd.DataFrame, testset: pd.DataFrame, k: int = 3) -> d
 
 
 # ── Step 3: RAG ────────────────────────────────────────────
+def embed_text(text: str) -> list[float]:
+    """로컬 Ollama 임베딩 (nomic-embed-text)"""
+    resp = requests.post(
+        f"{LLM_BASE_URL}/embeddings",
+        headers=LLM_HEADERS,
+        json={"model": EMBED_MODEL, "input": text},
+        timeout=60,
+    )
+    resp.raise_for_status()
+    return resp.json()["data"][0]["embedding"]
+
+
 def build_rag_index(trainset: pd.DataFrame):
-    """FAISS 인덱스 구축 (Gemini 임베딩)"""
+    """FAISS 인덱스 구축 (로컬 임베딩)"""
     import numpy as np
     import faiss
 
     texts = trainset["instruction"].tolist()
     outputs = trainset["output"].tolist()
 
-    # Gemini 임베딩
     embeddings = []
-    for text in texts:
-        time.sleep(0.5)
-        resp = client.models.embed_content(
-            model="gemini-embedding-001",
-            contents=text,
-        )
-        embeddings.append(resp.embeddings[0].values)
+    for i, text in enumerate(texts):
+        print(f"  Embedding {i+1}/{len(texts)}...", end="\r")
+        embeddings.append(embed_text(text))
 
     emb_matrix = np.array(embeddings, dtype="float32")
     dim = emb_matrix.shape[1]
@@ -301,18 +341,14 @@ def search_similar(query: str, index, texts: list, outputs: list, k: int = 3):
     """쿼리와 가장 유사한 k개 예시 검색"""
     import numpy as np
 
-    resp = client.models.embed_content(
-        model="gemini-embedding-001",
-        contents=query,
-    )
-    q_emb = np.array([resp.embeddings[0].values], dtype="float32")
+    q_emb = np.array([embed_text(query)], dtype="float32")
     _, indices = index.search(q_emb, k)
     return [(texts[i], outputs[i]) for i in indices[0]]
 
 
 def run_rag(trainset: pd.DataFrame, testset: pd.DataFrame, k: int = 3) -> dict:
     print(f"\n=== Step 3: RAG (k={k}) ===")
-    print("  Building FAISS index with Gemini embeddings...")
+    print("  Building FAISS index with local embeddings...")
     index, train_texts, train_outputs, _ = build_rag_index(trainset)
     correct = 0
     details = []
@@ -334,8 +370,14 @@ def run_rag(trainset: pd.DataFrame, testset: pd.DataFrame, k: int = 3) -> dict:
             continue
 
         device_id = extract_switch_id(intent)
-        for flow in actual.get("flows", []):
-            flow["deviceId"] = device_id
+        for i, flow in enumerate(actual.get("flows", [])):
+            if isinstance(flow, str):
+                try:
+                    actual["flows"][i] = flow = json.loads(flow)
+                except Exception:
+                    continue
+            if isinstance(flow, dict):
+                flow["deviceId"] = device_id
 
         ok = compare_onos_json(expected, actual)
         if ok:
@@ -350,6 +392,13 @@ def run_rag(trainset: pd.DataFrame, testset: pd.DataFrame, k: int = 3) -> dict:
 
 # ── 메인 ────────────────────────────────────────────────────
 def main():
+    global LLM_MODEL
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model", default=LLM_MODEL, help="LLM model name (e.g. qwen3:8b, gemma4:e4b)")
+    args = parser.parse_args()
+    LLM_MODEL = args.model
+    print(f"[Model: {LLM_MODEL}]")
+
     print("Loading Intent2Flow-ONOS dataset...")
     df = pd.read_csv(DATASET_PATH)
     print(f"Total samples: {len(df)}")
@@ -383,11 +432,12 @@ def main():
 
     # 결과 저장
     timestamp = int(time.time())
-    summary = [{"step": r["step"], "accuracy": r["accuracy"], "correct": r["correct"], "total": r["total"]} for r in results]
+    model_tag = LLM_MODEL.replace(":", "-")
+    summary = [{"model": LLM_MODEL, "step": r["step"], "accuracy": r["accuracy"], "correct": r["correct"], "total": r["total"]} for r in results]
     summary_df = pd.DataFrame(summary)
 
-    summary_path = os.path.join(RESULTS_DIR, f"summary_{timestamp}.csv")
-    details_path = os.path.join(RESULTS_DIR, f"details_{timestamp}.json")
+    summary_path = os.path.join(RESULTS_DIR, f"summary_{model_tag}_{timestamp}.csv")
+    details_path = os.path.join(RESULTS_DIR, f"details_{model_tag}_{timestamp}.json")
 
     summary_df.to_csv(summary_path, index=False)
     with open(details_path, "w", encoding="utf-8") as f:
