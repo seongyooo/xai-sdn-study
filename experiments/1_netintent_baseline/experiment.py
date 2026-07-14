@@ -153,17 +153,27 @@ def compare_onos_json(expected_json, actual_json):
     expected_json = normalize_json(clean_json(expected_json))
     actual_json = normalize_json(clean_json(actual_json))
 
-    for flow in actual_json.get("flows", []):
+    expected_flows = expected_json.get("flows", [])
+    actual_flows = actual_json.get("flows", [])
+
+    # flows 배열이 비어있으면 비교 불가
+    if not expected_flows or not actual_flows:
+        return False
+
+    exp_flow = expected_flows[0]
+    act_flow = actual_flows[0]
+
+    for flow in actual_flows:
         if "priority" not in flow or not isinstance(flow["priority"], (int, str)):
             return False
 
-    for flow in actual_json.get("flows", []):
-        if flow.get("timeout", 0) != expected_json["flows"][0].get("timeout", 0):
+    for flow in actual_flows:
+        if flow.get("timeout", 0) != exp_flow.get("timeout", 0):
             return False
 
     for field in exact_match_fields:
-        if field in expected_json["flows"][0] and field in actual_json["flows"][0]:
-            if not dict_equal_ignore_order(expected_json["flows"][0][field], actual_json["flows"][0][field], ignore_fields):
+        if field in exp_flow and field in act_flow:
+            if not dict_equal_ignore_order(exp_flow[field], act_flow[field], ignore_fields):
                 return False
 
     return True
@@ -186,6 +196,9 @@ def extract_switch_id(intent: str) -> str:
     for word, num in ordinals.items():
         if word in intent.lower():
             return f"of:{num:016x}"
+    # switch ID를 파싱할 수 없는 경우 switch 1로 fallback — 모든 실패 케이스가
+    # 동일한 switch에 할당되므로 충돌 탐지 결과를 편향시킬 수 있음.
+    print(f"  [WARN] switch ID 파싱 실패, switch 1 사용: {intent[:60]}...")
     return "of:0000000000000001"
 
 

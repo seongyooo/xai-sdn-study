@@ -130,14 +130,15 @@ def run_conflict_detection(sample_size: int = None):
     df["Conflicting_norm"] = df["Conflicting"].apply(normalize_label)
 
     if sample_size:
-        df = df.head(sample_size)
-        print(f"샘플 {sample_size}개만 실행 (전체: 74개)\n")
+        df = df.sample(n=min(sample_size, len(df)), random_state=42).reset_index(drop=True)
+        print(f"샘플 {len(df)}개만 실행 (전체: 74개, random_state=42)\n")
     else:
         print(f"전체 {len(df)}개 실행\n")
 
     y_true = []  # 정답 레이블
     y_pred = []  # 예측 레이블
     details = []
+    api_errors = 0  # API 실패로 평가에서 제외된 샘플 수
 
     for idx, row in df.iterrows():
         rule1 = parse_flowrule(row["ONOS Flow Rule 1"])
@@ -157,7 +158,9 @@ def run_conflict_detection(sample_size: int = None):
         reason = result.get("reason", "")
 
         if pred_conflicting is None:
-            print("API 오류 - 스킵")
+            # API 실패: 정확도 분모에서 제외하되 따로 카운트
+            api_errors += 1
+            print(f"API 오류 — 평가 제외 (누적 {api_errors}건)")
             continue
 
         pred_label = "yes" if pred_conflicting else "no"
@@ -178,16 +181,24 @@ def run_conflict_detection(sample_size: int = None):
         })
 
     # 평가 지표 계산
+    evaluated = len(y_true)
+    total_attempted = evaluated + api_errors
+
     print("\n" + "="*50)
     print("평가 결과")
     print("="*50)
+    if api_errors:
+        print(f"⚠  API 오류로 제외된 샘플: {api_errors}/{total_attempted}건 "
+              f"(정확도는 {evaluated}건 기준)")
     print(classification_report(y_true, y_pred, target_names=["no", "yes"]))
 
-    accuracy = sum(1 for a, b in zip(y_true, y_pred) if a == b) / len(y_true) * 100
-    print(f"Accuracy: {accuracy:.1f}%")
+    accuracy = sum(1 for a, b in zip(y_true, y_pred) if a == b) / evaluated * 100
+    print(f"Accuracy: {accuracy:.1f}%  (평가 샘플 {evaluated}/{total_attempted})")
 
     return {
         "accuracy": round(accuracy, 1),
+        "evaluated": evaluated,
+        "api_errors": api_errors,
         "y_true": y_true,
         "y_pred": y_pred,
         "details": details,
