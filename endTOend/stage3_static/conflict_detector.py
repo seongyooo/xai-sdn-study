@@ -54,11 +54,16 @@ def get_criteria_dict(flow: dict) -> dict:
 
 
 def get_action_key(flow: dict) -> str:
-    """action을 비교 가능한 문자열로 변환"""
+    """action을 비교 가능한 문자열로 변환.
+    treatment 없음 또는 NOACTION instruction = DROP으로 통일.
+    """
     treatment = flow.get("treatment")
     if treatment is None:
         return "DROP"
     instructions = treatment.get("instructions", [])
+    # NOACTION만 있는 경우 = treatment 없는 DROP과 동일하게 취급
+    if not instructions or all(i.get("type") == "NOACTION" for i in instructions):
+        return "DROP"
     return json.dumps(
         sorted(instructions, key=lambda x: json.dumps(x, sort_keys=True)),
         sort_keys=True,

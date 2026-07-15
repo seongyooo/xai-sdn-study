@@ -91,12 +91,8 @@ class Deployer:
             flow_id = flow.get("id")
             if not flow_id:
                 continue
-            # 새로 추가된 flow
+            # 배포 전에 없던 새 flow만 수집
             if flow_id not in before_ids:
                 new_flow_ids.append(flow_id)
-            # 또는 priority가 일치하는 flow (기존에 있었더라도)
-            elif target_priority is not None and flow.get("priority") == target_priority:
-                if flow_id not in new_flow_ids:
-                    new_flow_ids.append(flow_id)
 
         return DeployResult(success=True, flow_ids=new_flow_ids)
