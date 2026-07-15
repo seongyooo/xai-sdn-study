@@ -95,9 +95,10 @@ class TwinVerifier:
         # FlowRule에서 action 추출
         flows = flowrule.get("flows", [])
         flow = flows[0] if flows else {}
-        has_treatment = "treatment" in flow
-        # treatment 없으면 block, 있으면 forward/qos
-        action = "block" if not has_treatment else "forward"
+        # OUTPUT instruction이 있으면 forward, 없으면 block(DROP/NOACTION)
+        instructions = flow.get("treatment", {}).get("instructions", [])
+        has_output = any(i.get("type") == "OUTPUT" for i in instructions)
+        action = "forward" if has_output else "block"
 
         # 타겟 pair 결정 (src_ip, dst_ip로 추정)
         criteria = flow.get("selector", {}).get("criteria", [])
@@ -126,19 +127,33 @@ class TwinVerifier:
             print("    [Twin] ONOS 준비 대기 중...")
             client.wait_until_ready(timeout=60.0)
 
-            # ── 2. 기존 flow 정리 ──────────────────────────
+            # ── 2. 필수 ONOS 앱 활성화 ────────────────────
+            # OpenFlow 앱이 꺼져 있으면 스위치가 ONOS에 연결되지 않음
+            print("    [Twin] ONOS OpenFlow 앱 활성화 중...")
+            for app in [
+                "org.onosproject.openflow-base",
+                "org.onosproject.openflow",
+                "org.onosproject.fwd",
+            ]:
+                try:
+                    client.activate_application(app)
+                except Exception:
+                    pass  # 이미 활성화된 앱은 오류 무시
+            time.sleep(2)
+
+            # ── 3. 기존 flow 정리 ──────────────────────────
             print("    [Twin] 기존 flow 정리 중...")
             client.clear_app_flows()
             time.sleep(1)
 
-            # ── 3. Mininet 토폴로지 시작 ───────────────────
+            # ── 4. Mininet 토폴로지 시작 ───────────────────
             print("    [Twin] Mininet 토폴로지 시작 중...")
             net = build_network(self.controller_ip, self.controller_port)
             net.start()
 
-            # 디바이스 연결 대기
+            # 디바이스 연결 대기 (90초로 늘림 — 첫 연결은 오래 걸릴 수 있음)
             print("    [Twin] 디바이스 연결 대기 중...")
-            client.wait_for_devices(EXPECTED_DEVICE_IDS, timeout=60.0)
+            client.wait_for_devices(EXPECTED_DEVICE_IDS, timeout=90.0)
             time.sleep(3)  # 프로액티브 flow 설치 대기
 
             # ── 4. baseline 연결성 확인 ────────────────────
@@ -152,7 +167,12 @@ class TwinVerifier:
             # ── 5. FlowRule 배포 ───────────────────────────
             print("    [Twin] FlowRule 배포 중...")
             client.deploy_flow_rules(flowrule)
-            time.sleep(2)  # flow 설치 대기
+            # flow가 OVS에 실제 push될 때까지 대기 (ADDED 상태 확인)
+            client.wait_for_flow(
+                device_id=flow.get("deviceId", "of:0000000000000001"),
+                priority=flow.get("priority", 50000),
+                timeout=15.0,
+            )
 
             # ── 6. intent 동작 확인 ────────────────────────
             # block이면 ping 실패, forward이면 ping 성공
@@ -236,10 +256,15 @@ class TwinVerifier:
         """
         try:
             host = net.get(src_host)
-            result = host.cmd(f"ping -c 2 -W 1 {dst_ip}")
+            host.sendCmd(f"ping -c 3 -W 1 {dst_ip}")
+            result = host.waitOutput()
 
-            # "0% packet loss" → 도달 가능
-            reachable = "0% packet loss" in result
+            # "0% packet loss" in "100% packet loss" 가 True가 되는 버그 방지
+            # → regex로 실제 packet loss % 추출
+            import re as _re
+            m = _re.search(r"(\d+)% packet loss", result)
+            loss_pct = int(m.group(1)) if m else 100
+            reachable = (loss_pct == 0)
 
             if expect_reach:
                 success = reachable

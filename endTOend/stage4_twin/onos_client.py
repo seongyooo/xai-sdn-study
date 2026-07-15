@@ -125,6 +125,31 @@ class OnosClient:
         missing = sorted(expected_ids - available)
         raise OnosError(f"ONOS 디바이스 연결 실패: {missing}")
 
+    def wait_for_flow(
+        self,
+        device_id: str,
+        priority: int,
+        timeout: float = 15.0,
+        interval: float = 1.0,
+    ) -> None:
+        """priority의 flow가 ADDED 상태로 설치될 때까지 대기"""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                all_flows = self.request("GET", f"flows/{device_id}").get("flows", [])
+                for f in all_flows:
+                    if f.get("priority") == priority and f.get("state") == "ADDED":
+                        return
+            except Exception:
+                pass
+            time.sleep(interval)
+        # timeout 시에도 진행 (경고만)
+        print(f"    [Twin] 경고: flow(priority={priority}) ADDED 상태 미확인 (계속 진행)")
+
+    def activate_application(self, app_name: str) -> None:
+        """ONOS 애플리케이션 활성화"""
+        self.request("POST", f"applications/{app_name}/active")
+
     def deploy_flow_rules(self, payload: dict[str, Any]) -> None:
         """FlowRule 배포"""
         flows = payload.get("flows")

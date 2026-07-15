@@ -156,9 +156,14 @@ Intent2Flow-ONOS.csv의 예시 50개를 임베딩해 FAISS IndexFlatL2에 저장
 
 | action | treatment |
 |--------|-----------|
-| `block` | 없음 (ONOS 암묵적 DROP) |
+| `block` | `{"instructions":[{"type":"NOACTION"}]}` (명시적 DROP) |
 | `forward` | `{"instructions":[{"type":"OUTPUT","port":"포트번호"}]}` |
 | `qos` | OUTPUT + QUEUE instructions |
+
+> **설계 결정**: ONOS REST API에 treatment 없이 POST하면 일부 ONOS 버전에서 DROP이 보장되지 않는다.
+> Intent2Flow-ONOS.csv 원본 데이터는 treatment를 생략하지만, 실제 ONOS+OVS 환경에서는
+> `NOACTION` instruction을 명시해야 OVS에 `actions=drop` 규칙이 확실히 설치된다.
+> action 감지 로직: `treatment.instructions`에 `OUTPUT` 타입이 있으면 forward, 없으면 block.
 
 #### 기본 priority
 
@@ -227,15 +232,31 @@ Linux + root + Mininet 설치 세 가지가 모두 충족되어야 실행된다.
 #### 검증 순서 (`twin_verifier.py`)
 
 1. ONOS 준비 대기 (`wait_until_ready`)
-2. 기존 stale flow 정리
-3. Mininet 다이아몬드 토폴로지 시작
-4. baseline 연결성 확인 (h1↔h4 ping)
-5. 후보 FlowRule 임시 배포
-6. 검증 실행:
+2. **OpenFlow 앱 활성화** (`activate_application`): `openflow-base`, `openflow`, `fwd` 순서로 활성화 — 미활성화 시 스위치가 ONOS에 연결되지 않음
+3. 기존 stale flow 정리
+4. Mininet 다이아몬드 토폴로지 시작
+5. 디바이스 연결 대기 (`wait_for_devices`, 90초)
+6. baseline 연결성 확인 (h1↔h4 ping)
+7. 후보 FlowRule 임시 배포
+8. **flow 설치 대기** (`wait_for_flow`): ONOS에서 해당 priority의 flow가 `ADDED` 상태가 될 때까지 최대 15초 대기
+9. 검증 실행:
    - **intent_check**: block이면 대상 pair ping 실패 확인, forward면 성공 확인
    - **regression**: 비대상 host pair (h2↔h3)가 영향받지 않는지 확인
-7. 무조건 rollback (성공/실패 무관)
-8. Mininet 종료
+10. 무조건 rollback (성공/실패 무관)
+11. Mininet 종료
+
+#### ping 판정 로직
+
+```python
+# 버그: "0% packet loss" in "100% packet loss" → True (Python 부분 문자열 매칭)
+# 수정: regex로 실제 loss % 추출
+m = re.search(r"(\d+)% packet loss", result)
+loss_pct = int(m.group(1)) if m else 100
+reachable = (loss_pct == 0)
+```
+
+> `"0% packet loss"`는 `"100% packet loss"` 문자열의 부분 문자열이다 (위치 2부터 매칭).
+> 단순 `in` 연산자 사용 시 block rule이 정상 작동해도 intent_check가 항상 FAIL하는 버그 발생.
 
 #### 토폴로지 (`topology.py`)
 
@@ -340,7 +361,62 @@ python pipeline.py --intent "..." --verbose
 
 ## 검증 결과
 
-### 실제 실행 로그 (`logs/20260715T044205Z.json`)
+### 전체 파이프라인 통합 실행 (`logs/20260715T060438Z.json`)
+
+**완전 자동 실행 (Stage 1~6 모두 통과, 실제 ONOS 배포까지 성공):**
+
+```
+모델: gemini-3.1-flash-lite
+인텐트: "block all traffic from 10.0.0.1 to 10.0.0.4 on switch 1"
+플래그: --no-rag
+환경: WSL2 (Ubuntu), ONOS Docker, Mininet
+```
+
+| Stage | 결과 | 내용 |
+|-------|------|------|
+| Stage 1 | ✅ PASS | action=block, src=10.0.0.1/32, dst=10.0.0.4/32, device=1 |
+| Stage 2 | ✅ PASS | of:0000000000000001, priority=50000, DROP |
+| Stage 3 | ✅ PASS | Schema OK, 충돌 없음 |
+| Stage 4 | ✅ PASS | baseline OK / intent_check(block 확인) OK / regression OK |
+| Stage 5 | ✅ APPROVE | 모든 검사 통과 근거 포함 |
+| Stage 6 | ✅ 배포 완료 | flow ID: 50665499140815819 |
+
+```
+최종 결정: APPROVE
+배포 성공 (1개 flow ID: ['50665499140815819'])
+```
+
+---
+
+### 디버깅 과정에서 발견된 버그 및 수정
+
+#### Bug 1: `activate_application()` 메서드 누락
+
+- **증상**: Digital Twin에서 Mininet 스위치가 ONOS에 연결되지 않음 (`ONOS 디바이스 연결 실패`)
+- **원인**: `endTOend/stage4_twin/onos_client.py`에 `activate_application()` 메서드 누락. `twin_verifier.py`에서 호출하지만 `AttributeError`가 `except Exception: pass`로 조용히 무시됨
+- **수정**: `onos_client.py`에 `activate_application()` 추가
+
+#### Bug 2: `"0% packet loss" in "100% packet loss"` Python 부분 문자열 버그
+
+- **증상**: OVS에 DROP rule이 정상 설치되고 실제로 패킷을 드롭하는데도 intent_check FAIL
+- **원인**: `"0% packet loss" in "100% packet loss"` = `True` (파이썬 `in` 연산자는 부분 문자열 검사)
+  - "100% packet loss" 문자열의 2번째 위치부터 "0% packet loss"가 매칭됨
+- **수정**: regex로 loss percentage 숫자 직접 추출 후 0 여부 비교
+
+#### Bug 3: ONOS block rule treatment 명시 필요
+
+- **증상**: ONOS에서 `ADDED` 상태임에도 OVS의 DROP rule이 실제로 패킷을 처리하지 않는 경우
+- **원인**: treatment 없이 POST 시 ONOS 버전에 따라 DROP이 보장되지 않음
+- **수정**: `"treatment": {"instructions": [{"type": "NOACTION"}]}` 명시적 추가
+
+#### Bug 4: `wait_for_flow()` 없음으로 인한 race condition
+
+- **원인**: flow를 ONOS에 POST한 직후 바로 ping 테스트를 실행하면, ONOS→OVS 전파 완료 전에 테스트가 수행될 수 있음
+- **수정**: `wait_for_flow()` 추가 — 해당 priority의 flow가 `ADDED` 상태가 될 때까지 최대 15초 대기
+
+---
+
+### 이전 실행 로그 (`logs/20260715T044205Z.json`)
 
 ```
 모델: gemini-3.1-flash-lite
@@ -418,10 +494,15 @@ report   = XAIExplainer().explain(...)  # Stage 5: APPROVE
 |------|------|
 | LLM → IntentIR 파싱 (block intent) | ✅ 정확 (action, device, IP 모두 추출) |
 | device_hint → ONOS ID 변환 | ✅ `switch 1` → `of:0000000000000001` |
-| block rule FlowRule 생성 | ✅ treatment 없음, criteria 3개 |
+| block rule FlowRule 생성 | ✅ NOACTION treatment, criteria 3개 |
 | Pydantic 스키마 검증 통과 | ✅ PASS |
 | 충돌 탐지 (기존 rule 없음) | ✅ 충돌 없음 |
-| XAI APPROVE 판정 | ✅ 정적 검증 통과 근거 포함 |
+| Digital Twin baseline 연결성 | ✅ h1→h4 ping 성공 확인 |
+| Digital Twin intent_check (block) | ✅ FlowRule 배포 후 h1→h4 ping 100% loss 확인 |
+| Digital Twin regression | ✅ h2→h3 영향 없음 확인 |
+| OVS DROP rule 실제 설치 확인 | ✅ `ovs-ofctl`: `priority=50000 actions=drop` |
+| XAI APPROVE 판정 | ✅ 모든 검사 통과 근거 포함 |
+| 실제 ONOS 배포 | ✅ flow ID `50665499140815819` |
 | 실행 로그 JSON 저장 | ✅ `logs/{run_id}.json` |
 | Windows 환경 Stage 4 자동 skip | ✅ 오류 없이 skipped 반환 |
 | Gemini 429 재시도 로직 | ✅ 30/60/120/180s 대기 |

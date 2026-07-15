@@ -155,7 +155,11 @@ def main() -> int:
     )
     if flow.get("treatment"):
         instructions = flow["treatment"].get("instructions", [])
-        stage2_content += f" | instructions={len(instructions)}개"
+        has_output = any(i.get("type") == "OUTPUT" for i in instructions)
+        if has_output:
+            stage2_content += f" | instructions={len(instructions)}개"
+        else:
+            stage2_content += " | action=DROP(차단)"
     else:
         stage2_content += " | action=DROP(차단)"
     print(f"  {stage2_content}")

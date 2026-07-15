@@ -160,8 +160,8 @@ def compile_flowrule(ir: IntentIR) -> dict:
     treatment: Optional[dict] = None
 
     if ir.action == "block":
-        # block → treatment 없음 (암묵적 DROP)
-        treatment = None
+        # block → NOACTION 명시 (ONOS REST API에서 DROP을 보장하는 방법)
+        treatment = {"instructions": [{"type": "NOACTION"}]}
 
     elif ir.action == "forward":
         instructions = []
