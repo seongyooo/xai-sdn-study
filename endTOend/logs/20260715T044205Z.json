@@ -1,0 +1,131 @@
+{
+  "run_id": "20260715T044205Z",
+  "intent": "block all traffic from 10.0.0.1 to 10.0.0.4 on switch 1",
+  "model": "gemini-3.1-flash-lite",
+  "rag_k": 3,
+  "timestamp": "20260715T044205Z",
+  "stage1": {
+    "action": "block",
+    "device_hint": "switch 1",
+    "src_ip": "10.0.0.1/32",
+    "dst_ip": "10.0.0.4/32",
+    "eth_type": "ipv4"
+  },
+  "stage2": {
+    "flows": [
+      {
+        "priority": 50000,
+        "timeout": 0,
+        "isPermanent": "true",
+        "deviceId": "of:0000000000000001",
+        "selector": {
+          "criteria": [
+            {
+              "type": "ETH_TYPE",
+              "ethType": "0x800"
+            },
+            {
+              "type": "IPV4_SRC",
+              "ip": "10.0.0.1/32"
+            },
+            {
+              "type": "IPV4_DST",
+              "ip": "10.0.0.4/32"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "stage3": {
+    "passed": true,
+    "schema_errors": [],
+    "conflicts": [],
+    "warnings": [],
+    "summary": "Schema OK | 충돌 없음 → PASS"
+  },
+  "stage4": {
+    "status": "skipped",
+    "reason": "--skip-twin 플래그로 스킵",
+    "checks": {},
+    "evidence": {},
+    "summary": "SKIP: --skip-twin 플래그로 스킵"
+  },
+  "stage5": {
+    "intent": "block all traffic from 10.0.0.1 to 10.0.0.4 on switch 1",
+    "ir_summary": "action=block(차단) | device=switch 1 | src=10.0.0.1/32 | dst=10.0.0.4/32",
+    "flowrule_summary": "deviceId=of:0000000000000001 | priority=50000 | criteria=3개 | action=DROP",
+    "static_summary": "Schema OK | 충돌 없음 → PASS",
+    "twin_summary": "스킵됨 (--skip-twin 플래그로 스킵)",
+    "decision": "APPROVE",
+    "decision_reason": "해당 FlowRule은 정적 검증 과정에서 스키마 오류나 기존 규칙과의 충돌이 발견되지 않아 안전한 것으로 확인되었습니다. 사용자의 요청에 따라 Digital Twin 검증은 생략되었으며, 이에 따라 최종적으로 배포가 승인되었습니다.",
+    "evidence": [
+      {
+        "stage": "Stage1_IntentParsing",
+        "finding": "action=block, device=switch 1",
+        "data": {
+          "action": "block",
+          "device_hint": "switch 1",
+          "src_ip": "10.0.0.1/32",
+          "dst_ip": "10.0.0.4/32",
+          "eth_type": "ipv4"
+        }
+      },
+      {
+        "stage": "Stage2_FlowRuleCompile",
+        "finding": "deviceId=of:0000000000000001, priority=50000",
+        "data": {
+          "flows": [
+            {
+              "priority": 50000,
+              "timeout": 0,
+              "isPermanent": "true",
+              "deviceId": "of:0000000000000001",
+              "selector": {
+                "criteria": [
+                  {
+                    "type": "ETH_TYPE",
+                    "ethType": "0x800"
+                  },
+                  {
+                    "type": "IPV4_SRC",
+                    "ip": "10.0.0.1/32"
+                  },
+                  {
+                    "type": "IPV4_DST",
+                    "ip": "10.0.0.4/32"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      {
+        "stage": "Stage3_StaticValidation",
+        "finding": "Schema OK | 충돌 없음 → PASS",
+        "data": {
+          "passed": true,
+          "schema_errors": [],
+          "conflicts": [],
+          "warnings": []
+        }
+      },
+      {
+        "stage": "Stage4_DigitalTwin",
+        "finding": "SKIP: --skip-twin 플래그로 스킵",
+        "data": {
+          "status": "skipped",
+          "reason": "--skip-twin 플래그로 스킵",
+          "checks": {},
+          "evidence": {}
+        }
+      }
+    ]
+  },
+  "stage6": {
+    "status": "skipped",
+    "reason": "--skip-deploy 플래그"
+  },
+  "decision": "APPROVE"
+}
