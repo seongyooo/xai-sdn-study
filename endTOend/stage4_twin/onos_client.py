@@ -172,6 +172,18 @@ class OnosClient:
             self.delete_flow(flow["deviceId"], flow["id"])
         return len(matches)
 
+    def hosts(self) -> list[dict[str, Any]]:
+        """등록된 호스트 목록 반환"""
+        return self.request("GET", "hosts").get("hosts", [])
+
+    def links(self) -> list[dict[str, Any]]:
+        """토폴로지 링크 목록 반환"""
+        return self.request("GET", "links").get("links", [])
+
+    def port_statistics(self) -> list[dict[str, Any]]:
+        """포트별 통계 반환"""
+        return self.request("GET", "statistics/ports").get("statistics", [])
+
     def clear_app_flows(self, app_ids: list[str] | None = None) -> None:
         """특정 앱(또는 기본 앱)이 설치한 flow 전체 삭제"""
         if app_ids is None:

@@ -84,6 +84,171 @@ if example_pick != "직접 입력":
 
 run_btn = st.button("▶ 실행", type="primary", disabled=not intent.strip())
 
+# ── 토폴로지 뷰 ──────────────────────────────────────────────────
+st.divider()
+st.subheader("🗺️ ONOS 네트워크 토폴로지")
+
+@st.fragment(run_every=10)
+def show_topology() -> None:
+    """ONOS에서 토폴로지와 포트 통계를 가져와 표시 (10초마다 자동 갱신)"""
+    try:
+        import networkx as nx
+        import matplotlib.pyplot as plt
+        import matplotlib.patches as mpatches
+        import pandas as pd
+    except ImportError as e:
+        st.warning(f"시각화 라이브러리 필요: pip install networkx matplotlib pandas\n({e})")
+        return
+
+    from stage4_twin.onos_client import OnosClient, OnosError
+
+    client = OnosClient()
+
+    col_graph, col_stats = st.columns([3, 2])
+
+    # ── 그래프 ────────────────────────────────────────────────────
+    with col_graph:
+        try:
+            devices = client.devices()
+            hosts   = client.hosts()
+            links   = client.links()
+
+            G = nx.Graph()
+
+            # 스위치 노드 추가
+            for d in devices:
+                dev_id    = d.get("id", "")
+                available = d.get("available", False)
+                # of:0000000000000001 → s1
+                dpid_suffix = dev_id.lstrip("of:").lstrip("0") or "0"
+                label = f"s{int(dpid_suffix, 16)}" if dpid_suffix.isalnum() else dev_id[-4:]
+                G.add_node(dev_id, kind="switch", available=available, label=label)
+
+            # 호스트 노드 추가
+            for h in hosts:
+                host_id = h.get("id", "")
+                ips     = h.get("ipAddresses", [])
+                label   = ips[0] if ips else host_id[:8]
+                G.add_node(host_id, kind="host", available=True, label=label)
+
+            # 스위치↔스위치 링크
+            seen: set = set()
+            for lk in links:
+                src = lk.get("src", {}).get("device")
+                dst = lk.get("dst", {}).get("device")
+                if src and dst:
+                    key = tuple(sorted([src, dst]))
+                    if key not in seen:
+                        G.add_edge(src, dst, kind="sw-sw")
+                        seen.add(key)
+
+            # 호스트↔스위치 링크
+            for h in hosts:
+                host_id   = h.get("id", "")
+                locations = h.get("locations", [])
+                for loc in locations:
+                    dev_id = loc.get("elementId")
+                    if dev_id and dev_id in G.nodes:
+                        G.add_edge(host_id, dev_id, kind="host-sw")
+
+            if G.number_of_nodes() == 0:
+                st.info("ONOS에 연결된 디바이스 없음 — Docker/ONOS 실행 중인지 확인하세요.")
+                return
+
+            # 레이아웃 (스위치를 중앙에, 호스트를 외곽에)
+            switch_nodes  = [n for n, d in G.nodes(data=True) if d["kind"] == "switch"]
+            host_nodes    = [n for n, d in G.nodes(data=True) if d["kind"] == "host"]
+            avail_sw      = [n for n in switch_nodes if G.nodes[n]["available"]]
+            unavail_sw    = [n for n in switch_nodes if not G.nodes[n]["available"]]
+
+            pos = nx.spring_layout(G, seed=42, k=2.0)
+
+            fig, ax = plt.subplots(figsize=(7, 4))
+            fig.patch.set_facecolor("#0e1117")
+            ax.set_facecolor("#0e1117")
+
+            # 엣지
+            sw_sw_edges   = [(u, v) for u, v, d in G.edges(data=True) if d.get("kind") == "sw-sw"]
+            host_sw_edges = [(u, v) for u, v, d in G.edges(data=True) if d.get("kind") == "host-sw"]
+            nx.draw_networkx_edges(G, pos, edgelist=sw_sw_edges,
+                                   edge_color="#888", width=2.0, ax=ax)
+            nx.draw_networkx_edges(G, pos, edgelist=host_sw_edges,
+                                   edge_color="#555", width=1.2, style="dashed", ax=ax)
+
+            # 노드
+            if avail_sw:
+                nx.draw_networkx_nodes(G, pos, nodelist=avail_sw,
+                                       node_color="#4CAF50", node_size=1000,
+                                       node_shape="s", ax=ax)
+            if unavail_sw:
+                nx.draw_networkx_nodes(G, pos, nodelist=unavail_sw,
+                                       node_color="#f44336", node_size=1000,
+                                       node_shape="s", ax=ax)
+            if host_nodes:
+                nx.draw_networkx_nodes(G, pos, nodelist=host_nodes,
+                                       node_color="#2196F3", node_size=600,
+                                       node_shape="o", ax=ax)
+
+            # 레이블
+            labels = {n: G.nodes[n]["label"] for n in G.nodes}
+            nx.draw_networkx_labels(G, pos, labels=labels, ax=ax,
+                                    font_color="white", font_size=8, font_weight="bold")
+
+            # 범례
+            legend = [
+                mpatches.Patch(color="#4CAF50", label="Switch (UP)"),
+                mpatches.Patch(color="#f44336", label="Switch (DOWN)"),
+                mpatches.Patch(color="#2196F3", label="Host"),
+            ]
+            ax.legend(handles=legend, loc="lower right",
+                      facecolor="#1e1e1e", labelcolor="white",
+                      fontsize=7, framealpha=0.8)
+            ax.axis("off")
+            plt.tight_layout()
+            st.pyplot(fig, use_container_width=True)
+            plt.close(fig)
+
+            # 요약 지표
+            m1, m2, m3 = st.columns(3)
+            m1.metric("스위치", f"{len(switch_nodes)}개 ({len(avail_sw)} UP)")
+            m2.metric("호스트", f"{len(host_nodes)}개")
+            m3.metric("링크", f"{len(sw_sw_edges)}개")
+
+        except OnosError as exc:
+            st.warning(f"ONOS 연결 실패 — {exc}")
+
+    # ── 포트 통계 ─────────────────────────────────────────────────
+    with col_stats:
+        st.markdown("**포트 통계**")
+        try:
+            stats = client.port_statistics()
+            rows = []
+            for dev_stat in stats:
+                dev_id = dev_stat.get("device", "")
+                dpid   = dev_id.lstrip("of:").lstrip("0") or "0"
+                sw_label = f"s{int(dpid, 16)}" if dpid.isalnum() else dev_id[-6:]
+                for p in dev_stat.get("ports", []):
+                    port = p.get("port", "")
+                    if port == "LOCAL":
+                        continue
+                    rows.append({
+                        "SW":      sw_label,
+                        "Port":    port,
+                        "Rx MB":   round(p.get("bytesReceived", 0) / 1e6, 3),
+                        "Tx MB":   round(p.get("bytesSent", 0)    / 1e6, 3),
+                        "Rx Pkts": p.get("packetsReceived", 0),
+                        "Tx Pkts": p.get("packetsSent", 0),
+                    })
+            if rows:
+                df = pd.DataFrame(rows)
+                st.dataframe(df, use_container_width=True, hide_index=True, height=300)
+            else:
+                st.info("포트 통계 없음")
+        except OnosError as exc:
+            st.info(f"포트 통계 조회 불가: {exc}")
+
+show_topology()
+
 # ── 파이프라인 실행 ───────────────────────────────────────────────
 if run_btn and intent.strip():
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -213,37 +378,47 @@ if run_btn and intent.strip():
             s4.update(label="**Stage 4** — Digital Twin 검증 ⏭️", state="complete")
         else:
             try:
-                st.write("Mininet + ONOS 환경 초기화 중... (수 분 소요)")
-                buf = io.StringIO()
-                with redirect_stdout(buf):
-                    from stage4_twin.twin_verifier import TwinVerifier
-                    verifier = TwinVerifier()
-                    twin_result = verifier.verify(flowrule)
-
-                twin_summary = twin_result.summary()
-                pipeline_result["stage4"] = {
-                    "status": twin_result.status,
-                    "reason": twin_result.reason,
-                    "checks": twin_result.checks,
-                    "evidence": twin_result.evidence,
-                    "summary": twin_summary,
-                }
-
-                if twin_result.status == "passed":
-                    st.success(twin_summary)
-                    for check, ok in twin_result.checks.items():
-                        st.write(f"{'✅' if ok else '❌'} {check}")
-                elif twin_result.status == "failed":
-                    st.error(twin_summary)
-                    for check, ok in twin_result.checks.items():
-                        st.write(f"{'✅' if ok else '❌'} {check}")
+                from stage4_twin.twin_verifier import TwinVerifier, TwinResult
+                # 플랫폼 사전 체크 — 조건 불충족 시 즉시 안내
+                skip_reason = TwinVerifier._check_platform()
+                if skip_reason:
+                    twin_result = TwinResult(status="skipped", reason=skip_reason)
+                    if "Linux" in skip_reason:
+                        st.warning(
+                            "⏭️ Digital Twin 스킵: Windows/macOS에서는 Mininet이 동작하지 않습니다.\n\n"
+                            "WSL(Linux) 환경에서 `sudo -E streamlit run app.py` 로 실행하면 활성화됩니다."
+                        )
+                    elif "root" in skip_reason:
+                        st.warning(
+                            "⏭️ Digital Twin 스킵: root 권한이 필요합니다.\n\n"
+                            "WSL 터미널에서 `sudo -E streamlit run app.py` 로 재실행하세요."
+                        )
+                    else:
+                        st.warning(f"⏭️ Digital Twin 스킵: {skip_reason}")
+                    s4.update(label="**Stage 4** — Digital Twin 검증 ⏭️", state="complete")
                 else:
-                    st.warning(twin_summary)
+                    st.write("Mininet + ONOS 환경 초기화 중... (수 분 소요)")
+                    buf = io.StringIO()
+                    with redirect_stdout(buf):
+                        verifier = TwinVerifier()
+                        twin_result = verifier.verify(flowrule)
 
-                s4_icon = {"passed": "✅", "failed": "❌", "skipped": "⏭️", "error": "❌"}.get(
-                    twin_result.status, "❓"
-                )
-                s4.update(label=f"**Stage 4** — Digital Twin {s4_icon}", state="complete")
+                    twin_summary = twin_result.summary()
+                    if twin_result.status == "passed":
+                        st.success(twin_summary)
+                        for check, ok in twin_result.checks.items():
+                            st.write(f"{'✅' if ok else '❌'} {check}")
+                    elif twin_result.status == "failed":
+                        st.error(twin_summary)
+                        for check, ok in twin_result.checks.items():
+                            st.write(f"{'✅' if ok else '❌'} {check}")
+                    else:
+                        st.warning(twin_summary)
+
+                    s4_icon = {"passed": "✅", "failed": "❌", "skipped": "⏭️", "error": "❌"}.get(
+                        twin_result.status, "❓"
+                    )
+                    s4.update(label=f"**Stage 4** — Digital Twin {s4_icon}", state="complete")
 
             except Exception as exc:
                 from stage4_twin.twin_verifier import TwinResult
