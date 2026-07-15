@@ -1,0 +1,10 @@
+{
+  "run_id": "20260715T043844Z",
+  "intent": "block all traffic from 10.0.0.1 to 10.0.0.4 on switch 1",
+  "model": "gemini-2.0-flash",
+  "rag_k": 3,
+  "timestamp": "20260715T043844Z",
+  "stage1": {
+    "error": "LLM이 응답을 반환하지 않았습니다. 인텐트: block all traffic from 10.0.0.1 to 10.0.0.4 on switch 1"
+  }
+}
