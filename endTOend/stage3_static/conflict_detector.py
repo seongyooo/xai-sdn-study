@@ -177,6 +177,16 @@ def _is_subset(c_sub: dict, c_super: dict) -> bool:
 
 def _compare_two_flows(f_new: dict, f_existing: dict) -> dict:
     """두 flow dict 간의 충돌을 탐지한다."""
+    # 0단계: 다른 장치의 규칙은 같은 패킷을 처리할 수 없으므로 충돌 불가
+    dev_new = f_new.get("deviceId")
+    dev_existing = f_existing.get("deviceId")
+    if dev_new and dev_existing and dev_new != dev_existing:
+        return {
+            "conflicting": False,
+            "conflict_type": None,
+            "reason": f"다른 장치({dev_new} vs {dev_existing}) — 충돌 불가",
+        }
+
     c_new = get_criteria_dict(f_new)
     c_existing = get_criteria_dict(f_existing)
     p_new = int(f_new.get("priority", 0))
