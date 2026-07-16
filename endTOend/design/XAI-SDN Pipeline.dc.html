@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  body { margin: 0; background: #0a0e1a; font-family: 'Inter', sans-serif; }
+  * { box-sizing: border-box; }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-thumb { background: #1f2937; border-radius: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  a { color: #3b82f6; text-decoration: none; }
+  a:hover { color: #60a5fa; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @keyframes slideIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+</style>
+</helmet>
+
+<div style="display:flex; height:100vh; width:100%; background:#0a0e1a; color:#f9fafb; overflow:hidden;">
+
+  <!-- LEFT SIDEBAR -->
+  <div style="width:240px; flex-shrink:0; background:#111827; border-right:1px solid #1f2937; display:flex; flex-direction:column; padding:20px 16px; overflow-y:auto;">
+    <div style="display:flex; align-items:center; gap:8px; margin-bottom:28px;">
+      <div style="width:28px; height:28px; border-radius:7px; background:linear-gradient(135deg,#3b82f6,#1d4ed8); display:flex; align-items:center; justify-content:center; flex-shrink:0;">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#f9fafb" stroke-width="2"><circle cx="6" cy="6" r="2.4"/><circle cx="18" cy="6" r="2.4"/><circle cx="12" cy="18" r="2.4"/><path d="M8 7l7 9M16 7l-7 9"/></svg>
+      </div>
+      <div style="font-size:15px; font-weight:700; letter-spacing:-0.2px;">XAI-SDN</div>
+    </div>
+
+    <div style="font-size:11px; font-weight:600; color:#9ca3af; letter-spacing:0.06em; margin-bottom:10px;">LLM SETTINGS</div>
+    <div style="margin-bottom:10px;">
+      <div style="font-size:12px; color:#9ca3af; margin-bottom:6px;">Model</div>
+      <select style="width:100%; background:#0a0e1a; color:#f9fafb; border:1px solid #1f2937; border-radius:8px; padding:8px 10px; font-size:13px; font-family:'JetBrains Mono',monospace;">
+        <option>qwen3:8b</option>
+        <option>gemini-2.0-flash</option>
+      </select>
+    </div>
+    <div style="display:flex; align-items:center; justify-content:space-between; padding:10px 2px; margin-bottom:18px;">
+      <span style="font-size:13px; color:#f9fafb;">Enable RAG</span>
+      <div style="width:36px; height:20px; border-radius:10px; background:#3b82f6; padding:2px; display:flex; justify-content:flex-end;">
+        <div style="width:16px; height:16px; border-radius:50%; background:#f9fafb;"></div>
+      </div>
+    </div>
+
+    <div style="height:1px; background:#1f2937; margin:4px 0 18px;"></div>
+
+    <div style="font-size:11px; font-weight:600; color:#9ca3af; letter-spacing:0.06em; margin-bottom:10px;">PIPELINE OPTIONS</div>
+    <div style="display:flex; align-items:center; justify-content:space-between; padding:8px 2px;">
+      <span style="font-size:13px; color:#f9fafb;">Skip Digital Twin</span>
+      <div style="width:36px; height:20px; border-radius:10px; background:#1f2937; padding:2px; display:flex; justify-content:flex-start;">
+        <div style="width:16px; height:16px; border-radius:50%; background:#9ca3af;"></div>
+      </div>
+    </div>
+    <div style="display:flex; align-items:center; justify-content:space-between; padding:8px 2px; margin-bottom:18px;">
+      <span style="font-size:13px; color:#f9fafb;">Skip ONOS Deploy</span>
+      <div style="width:36px; height:20px; border-radius:10px; background:#1f2937; padding:2px; display:flex; justify-content:flex-start;">
+        <div style="width:16px; height:16px; border-radius:50%; background:#9ca3af;"></div>
+      </div>
+    </div>
+
+    <div style="height:1px; background:#1f2937; margin:4px 0 18px;"></div>
+
+    <div style="font-size:11px; font-weight:600; color:#9ca3af; letter-spacing:0.06em; margin-bottom:10px;">RUN HISTORY</div>
+    <div style="display:flex; flex-direction:column; gap:6px;">
+      <sc-for list="{{ history }}" as="h" hint-placeholder-count="5">
+        <div style="font-size:12px; font-family:'JetBrains Mono',monospace; color:#9ca3af; background:#0a0e1a; border:1px solid #1f2937; border-radius:8px; padding:8px 10px; cursor:pointer; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" style-hover="border-color:#3b82f6; color:#f9fafb;">{{ h }}</div>
+      </sc-for>
+    </div>
+  </div>
+
+  <!-- CENTER -->
+  <div style="flex:1; min-width:0; overflow-y:auto; padding:28px 32px; display:flex; flex-direction:column; gap:20px;">
+
+    <div>
+      <textarea placeholder="Describe your network intent in natural language..." style="width:100%; min-height:76px; background:#111827; border:1px solid #1f2937; border-radius:12px; padding:14px 16px; color:#f9fafb; font-size:15px; font-family:'Inter',sans-serif; resize:none; outline:none;" style-focus="border-color:#3b82f6;"></textarea>
+
+      <div style="display:flex; gap:8px; margin-top:12px; flex-wrap:wrap;">
+        <sc-for list="{{ exampleIntents }}" as="ex" hint-placeholder-count="4">
+          <div style="font-size:12px; font-family:'JetBrains Mono',monospace; color:#9ca3af; background:#111827; border:1px solid #1f2937; border-radius:20px; padding:6px 14px; cursor:pointer;" style-hover="border-color:#3b82f6; color:#f9fafb;">{{ ex }}</div>
+        </sc-for>
+      </div>
+
+      <button style="width:100%; margin-top:14px; background:linear-gradient(135deg,#3b82f6,#1d4ed8); border:none; border-radius:10px; padding:13px; color:#fff; font-size:15px; font-weight:600; display:flex; align-items:center; justify-content:center; gap:8px; cursor:pointer;" style-hover="filter:brightness(1.08);">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="#fff"><path d="M8 5v14l11-7z"/></svg>
+        Run Pipeline
+      </button>
+    </div>
+
+    <div style="display:flex; flex-direction:column; gap:10px;">
+      <sc-for list="{{ stages }}" as="stage" hint-placeholder-count="6">
+        <div style="background:#111827; border:1px solid {{ stage.borderColor }}; border-radius:12px; overflow:hidden; animation:slideIn 0.4s ease {{ stage.delay }} backwards;">
+          <div style="display:flex; align-items:center; gap:12px; padding:14px 16px; cursor:pointer;" onClick="{{ stage.toggle }}">
+            <div style="width:26px; height:26px; border-radius:7px; background:{{ stage.badgeBg }}; color:{{ stage.badgeColor }}; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:700; flex-shrink:0;">{{ stage.num }}</div>
+            <div style="flex:1; font-size:14px; font-weight:600;">{{ stage.name }}</div>
+            <div style="font-size:12px; font-family:'JetBrains Mono',monospace; color:#9ca3af;">{{ stage.time }}</div>
+            <div style="width:20px; height:20px; display:flex; align-items:center; justify-content:center; flex-shrink:0;">{{ stage.icon }}</div>
+          </div>
+          <sc-if value="{{ stage.expanded }}" hint-placeholder-val="{{ false }}">
+            <div style="padding:0 16px 16px 54px; font-size:12px; font-family:'JetBrains Mono',monospace; color:#9ca3af; line-height:1.6; white-space:pre-wrap;">{{ stage.detail }}</div>
+          </sc-if>
+        </div>
+      </sc-for>
+    </div>
+
+    <div style="background:#0f1c16; border:1px solid #10b981; border-radius:12px; padding:18px 20px; display:flex; gap:14px; align-items:flex-start;">
+      <div style="width:32px; height:32px; border-radius:8px; background:#10b981; display:flex; align-items:center; justify-content:center; flex-shrink:0;">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#0a0e1a" stroke-width="3"><path d="M5 13l4 4L19 7"/></svg>
+      </div>
+      <div>
+        <div style="font-size:14px; font-weight:700; color:#10b981; margin-bottom:4px;">APPROVE</div>
+        <div style="font-size:13px; color:#d1d5db; line-height:1.5;">XAI Explanation: Rule set introduces no loops or shadowed entries; latency budget for video QoS class satisfied (est. 4.2ms &lt; 10ms SLA). Digital twin simulation confirms zero packet loss across affected paths.</div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- RIGHT TOPOLOGY -->
+  <div style="width:380px; flex-shrink:0; border-left:1px solid #1f2937; display:flex; flex-direction:column; overflow-y:auto; background:#0a0e1a;">
+    <div style="display:flex; align-items:center; justify-content:space-between; padding:18px 18px 12px;">
+      <div style="font-size:13px; font-weight:600;">Live Network Topology</div>
+      <div style="font-size:11px; font-family:'JetBrains Mono',monospace; color:#9ca3af; background:#111827; border:1px solid #1f2937; border-radius:20px; padding:3px 9px; display:flex; align-items:center; gap:4px;">
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" stroke-width="3"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/></svg>
+        {{ refreshCountdown }}
+      </div>
+    </div>
+
+    <div style="margin:0 18px 14px; background:#0d1117; border:1px solid #1f2937; border-radius:12px; height:280px; position:relative; overflow:hidden;">
+      <svg width="100%" height="100%" viewBox="0 0 340 280">
+        <line x1="90" y1="60" x2="90" y2="150" stroke="#374151" stroke-width="1.5"/>
+        <line x1="250" y1="60" x2="250" y2="150" stroke="#374151" stroke-width="1.5"/>
+        <line x1="90" y1="150" x2="250" y2="150" stroke="#374151" stroke-width="1.5"/>
+        <line x1="90" y1="150" x2="90" y2="220" stroke="#374151" stroke-width="1.5"/>
+        <line x1="250" y1="150" x2="250" y2="220" stroke="#374151" stroke-width="1.5"/>
+        <line x1="90" y1="60" x2="30" y2="30" stroke="#374151" stroke-width="1.5"/>
+
+        <g transform="translate(90,60)"><polygon points="0,-16 14,-8 14,8 0,16 -14,8 -14,-8" fill="#10b981" stroke="#0a0e1a" stroke-width="1.5"/><text x="0" y="4" text-anchor="middle" font-size="10" font-family="JetBrains Mono" fill="#0a0e1a" font-weight="700">S1</text></g>
+        <g transform="translate(250,60)"><polygon points="0,-16 14,-8 14,8 0,16 -14,8 -14,-8" fill="#f59e0b" stroke="#0a0e1a" stroke-width="1.5"/><text x="0" y="4" text-anchor="middle" font-size="10" font-family="JetBrains Mono" fill="#0a0e1a" font-weight="700">S2</text></g>
+        <g transform="translate(90,150)"><polygon points="0,-16 14,-8 14,8 0,16 -14,8 -14,-8" fill="#6b7280" stroke="#0a0e1a" stroke-width="1.5"/><text x="0" y="4" text-anchor="middle" font-size="10" font-family="JetBrains Mono" fill="#0a0e1a" font-weight="700">S3</text></g>
+        <g transform="translate(250,150)"><polygon points="0,-16 14,-8 14,8 0,16 -14,8 -14,-8" fill="#ef4444" stroke="#0a0e1a" stroke-width="1.5"/><text x="0" y="4" text-anchor="middle" font-size="10" font-family="JetBrains Mono" fill="#0a0e1a" font-weight="700">S4</text></g>
+
+        <g transform="translate(30,30)"><circle r="11" fill="#111827" stroke="#3b82f6" stroke-width="2"/><text x="0" y="3" text-anchor="middle" font-size="9" font-family="JetBrains Mono" fill="#f9fafb">H1</text></g>
+        <g transform="translate(90,220)"><circle r="11" fill="#111827" stroke="#3b82f6" stroke-width="2"/><text x="0" y="3" text-anchor="middle" font-size="9" font-family="JetBrains Mono" fill="#f9fafb">H2</text></g>
+        <g transform="translate(250,220)"><circle r="11" fill="#111827" stroke="#3b82f6" stroke-width="2"/><text x="0" y="3" text-anchor="middle" font-size="9" font-family="JetBrains Mono" fill="#f9fafb">H3</text></g>
+        <g transform="translate(310,110)"><circle r="11" fill="#111827" stroke="#3b82f6" stroke-width="2"/><text x="0" y="3" text-anchor="middle" font-size="9" font-family="JetBrains Mono" fill="#f9fafb">H4</text></g>
+        <line x1="310" y1="110" x2="250" y2="60" stroke="#374151" stroke-width="1.5"/>
+      </svg>
+    </div>
+
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; padding:0 18px 16px;">
+      <sc-for list="{{ metrics }}" as="m" hint-placeholder-count="4">
+        <div style="background:#111827; border:1px solid #1f2937; border-radius:10px; padding:10px 12px;">
+          <div style="font-size:18px; font-weight:700; font-family:'JetBrains Mono',monospace;">{{ m.value }}</div>
+          <div style="font-size:11px; color:#9ca3af; margin-top:2px;">{{ m.label }}</div>
+        </div>
+      </sc-for>
+    </div>
+
+    <div style="padding:0 18px 20px;">
+      <div style="font-size:12px; font-weight:600; color:#9ca3af; margin-bottom:8px; letter-spacing:0.04em;">FLOW RULES</div>
+      <div style="border:1px solid #1f2937; border-radius:10px; overflow:hidden; font-size:11px; font-family:'JetBrains Mono',monospace;">
+        <div style="display:grid; grid-template-columns:1fr 0.6fr 1.6fr 1fr; background:#111827;">
+          <div style="padding:7px 10px; color:#9ca3af; font-weight:500; border-bottom:1px solid #1f2937;">Device</div>
+          <div style="padding:7px 10px; color:#9ca3af; font-weight:500; border-bottom:1px solid #1f2937;">Pri</div>
+          <div style="padding:7px 10px; color:#9ca3af; font-weight:500; border-bottom:1px solid #1f2937;">Match</div>
+          <div style="padding:7px 10px; color:#9ca3af; font-weight:500; border-bottom:1px solid #1f2937;">Action</div>
+        </div>
+        <sc-for list="{{ flowRules }}" as="r" hint-placeholder-count="6">
+          <div style="display:grid; grid-template-columns:1fr 0.6fr 1.6fr 1fr; border-bottom:1px solid #1f2937;">
+            <div style="padding:7px 10px; color:#f9fafb;">{{ r.device }}</div>
+            <div style="padding:7px 10px; color:#9ca3af;">{{ r.priority }}</div>
+            <div style="padding:7px 10px; color:#d1d5db;">{{ r.match }}</div>
+            <div style="padding:7px 10px; display:flex; align-items:center; gap:5px; color:{{ r.actionColor }};"><span style="width:6px; height:6px; border-radius:50%; background:{{ r.actionColor }};"></span>{{ r.action }}</div>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  state = {
+    expanded: { 1: false, 2: false, 3: true, 4: false, 5: false, 6: false }
+  };
+
+  toggleStage(n) {
+    this.setState(s => ({ expanded: { ...s.expanded, [n]: !s.expanded[n] } }));
+  }
+
+  spinner() {
+    return React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', style: { animation: 'spin 1s linear infinite' } },
+      React.createElement('circle', { cx: 12, cy: 12, r: 9, fill: 'none', stroke: '#1f2937', strokeWidth: 3 }),
+      React.createElement('path', { d: 'M21 12a9 9 0 0 0-9-9', fill: 'none', stroke: '#3b82f6', strokeWidth: 3, strokeLinecap: 'round' })
+    );
+  }
+  check() {
+    return React.createElement('svg', { width: 16, height: 16, viewBox: '0 0 24 24', fill: 'none', stroke: '#10b981', strokeWidth: 3 },
+      React.createElement('path', { d: 'M5 13l4 4L19 7', strokeLinecap: 'round', strokeLinejoin: 'round' })
+    );
+  }
+  dot(color) {
+    return React.createElement('div', { style: { width: 8, height: 8, borderRadius: '50%', background: color } });
+  }
+
+  renderVals() {
+    const st = this.state.expanded;
+    const stageDefs = [
+      { num: 1, name: '① Intent Parsing', status: 'done', time: '0.4s',
+        detail: 'Parsed intent → structured JSON:\n{ "action": "qos", "target": "video-stream", "path": "H1→H4" }' },
+      { num: 2, name: '② FlowRule Compile', status: 'done', time: '0.7s',
+        detail: 'Compiled 3 OpenFlow rules for S1, S2, S4 targeting video-stream flow class.' },
+      { num: 3, name: '③ Static Validation', status: 'running', time: '1.2s',
+        detail: 'Checking rule set for loops, shadowed entries, priority conflicts...' },
+      { num: 4, name: '④ Digital Twin', status: 'pending', time: '—', detail: 'Waiting for validation to complete.' },
+      { num: 5, name: '⑤ XAI Explanation', status: 'pending', time: '—', detail: 'Waiting for simulation results.' },
+      { num: 6, name: '⑥ ONOS Deploy', status: 'pending', time: '—', detail: 'Waiting for approval.' },
+    ];
+
+    const stages = stageDefs.map((s, i) => {
+      let badgeBg, badgeColor, borderColor, icon;
+      if (s.status === 'done') { badgeBg = '#10b981'; badgeColor = '#0a0e1a'; borderColor = '#1f2937'; icon = this.check(); }
+      else if (s.status === 'running') { badgeBg = '#3b82f6'; badgeColor = '#f9fafb'; borderColor = '#3b82f6'; icon = this.spinner(); }
+      else { badgeBg = '#1f2937'; badgeColor = '#9ca3af'; borderColor = '#1f2937'; icon = this.dot('#374151'); }
+      return {
+        ...s, badgeBg, badgeColor, borderColor, icon,
+        delay: `${i * 0.08}s`,
+        expanded: st[s.num],
+        toggle: () => this.toggleStage(s.num),
+      };
+    });
+
+    return {
+      stages,
+      history: [
+        'Block 10.0.0.1→10.0.0.4',
+        'QoS video stream H1→H4',
+        'Isolate VLAN 20 traffic',
+        'Rate-limit S3 uplink to 50Mbps',
+        'Mirror port S2:eth3 for IDS',
+      ],
+      exampleIntents: [
+        'Block 10.0.0.1→10.0.0.4',
+        'QoS video stream',
+        'Isolate VLAN 20',
+        'Mirror traffic for IDS',
+      ],
+      refreshCountdown: '↻ 8s',
+      metrics: [
+        { label: 'Switches', value: '4' },
+        { label: 'Hosts', value: '4' },
+        { label: 'Links', value: '6' },
+        { label: 'Rules', value: '12' },
+      ],
+      flowRules: [
+        { device: 'S1', priority: '400', match: 'ip_dst=10.0.0.4', action: 'FORWARD', actionColor: '#10b981' },
+        { device: 'S2', priority: '400', match: 'udp_dport=5004', action: 'FORWARD', actionColor: '#10b981' },
+        { device: 'S3', priority: '300', match: 'ip_src=10.0.0.1', action: 'DROP', actionColor: '#f59e0b' },
+        { device: 'S4', priority: '350', match: 'vlan=20', action: 'FORWARD', actionColor: '#10b981' },
+        { device: 'S4', priority: '250', match: 'eth_type=0x88cc', action: 'DROP', actionColor: '#f59e0b' },
+        { device: 'S2', priority: '100', match: 'in_port=3', action: 'FORWARD', actionColor: '#10b981' },
+      ],
+    };
+  }
+}
+
+</script>
+</body>
+</html>

@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>XAI-SDN Pipeline</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+</head>
+<body>
+<div id="app">
+
+  <!-- ── LEFT SIDEBAR ──────────────────────────────────────── -->
+  <aside id="sidebar">
+    <div class="sidebar-logo">
+      <div class="logo-icon">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#f9fafb" stroke-width="2">
+          <circle cx="6" cy="6" r="2.4"/>
+          <circle cx="18" cy="6" r="2.4"/>
+          <circle cx="12" cy="18" r="2.4"/>
+          <path d="M8 7l7 9M16 7l-7 9"/>
+        </svg>
+      </div>
+      <span class="logo-text">XAI-SDN</span>
+    </div>
+
+    <div class="sidebar-section-label">LLM SETTINGS</div>
+    <div class="sidebar-field">
+      <div class="sidebar-field-label">Model</div>
+      <select id="model-select" class="select">
+        <optgroup label="Ollama (Local)">
+          <option value="qwen3:8b">qwen3:8b</option>
+          <option value="gemma3:8b">gemma3:8b</option>
+        </optgroup>
+        <optgroup label="Gemini (API)">
+          <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite</option>
+          <option value="gemini-2.0-flash">gemini-2.0-flash</option>
+        </optgroup>
+      </select>
+    </div>
+    <div class="toggle-row">
+      <span class="toggle-label">Enable RAG</span>
+      <label class="toggle">
+        <input type="checkbox" id="toggle-rag" checked>
+        <span class="toggle-track"></span>
+      </label>
+    </div>
+
+    <div class="sidebar-divider"></div>
+
+    <div class="sidebar-section-label">PIPELINE OPTIONS</div>
+    <div class="toggle-row">
+      <span class="toggle-label">Skip Digital Twin</span>
+      <label class="toggle">
+        <input type="checkbox" id="toggle-twin">
+        <span class="toggle-track"></span>
+      </label>
+    </div>
+    <div class="toggle-row">
+      <span class="toggle-label">Skip ONOS Deploy</span>
+      <label class="toggle">
+        <input type="checkbox" id="toggle-deploy">
+        <span class="toggle-track"></span>
+      </label>
+    </div>
+
+    <div class="sidebar-divider"></div>
+
+    <div class="sidebar-section-label">RUN HISTORY</div>
+    <div id="history-list"></div>
+  </aside>
+
+  <!-- ── CENTER MAIN ──────────────────────────────────────── -->
+  <main id="main">
+
+    <div id="intent-section">
+      <textarea
+        id="intent-input"
+        placeholder="Describe your network intent in natural language..."
+      ></textarea>
+
+      <div id="example-chips">
+        <div class="example-chip" data-intent="Block all traffic from 10.0.0.1 to 10.0.0.4 on switch 1">Block 10.0.0.1→10.0.0.4</div>
+        <div class="example-chip" data-intent="Apply QoS for video streaming from H1 to H4 with 10ms SLA">QoS video stream</div>
+        <div class="example-chip" data-intent="Isolate VLAN 20 traffic on switch 2">Isolate VLAN 20</div>
+        <div class="example-chip" data-intent="Mirror all traffic on S2 port 3 to port 4 for IDS inspection">Mirror for IDS</div>
+      </div>
+
+      <button id="run-btn">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+        Run Pipeline
+      </button>
+    </div>
+
+    <div id="stages-section">
+      <!-- Dynamically rendered by app.js -->
+    </div>
+
+    <div id="decision-banner" style="display:none"></div>
+
+  </main>
+
+  <!-- ── RIGHT TOPOLOGY PANEL ─────────────────────────────── -->
+  <aside id="topology-panel">
+    <div class="topology-header">
+      <span class="topology-title">Live Network Topology</span>
+      <div class="refresh-badge">
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" stroke-width="3">
+          <path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/>
+        </svg>
+        <span id="refresh-countdown">↻ 10s</span>
+      </div>
+    </div>
+
+    <div id="topology-graph">
+      <div id="topology-placeholder" class="topo-placeholder">
+        Connecting to ONOS...
+      </div>
+    </div>
+
+    <div id="metrics-grid">
+      <div class="metric-card">
+        <div class="metric-value" id="metric-switches">—</div>
+        <div class="metric-label">Switches</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-value" id="metric-hosts">—</div>
+        <div class="metric-label">Hosts</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-value" id="metric-links">—</div>
+        <div class="metric-label">Links</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-value" id="metric-rules">—</div>
+        <div class="metric-label">Rules</div>
+      </div>
+    </div>
+
+    <div id="flow-table-section">
+      <div class="flow-table-label">FLOW RULES</div>
+      <div class="flow-table-wrap">
+        <div class="flow-table-header">
+          <div>Device</div>
+          <div>Pri</div>
+          <div>Match</div>
+          <div>Action</div>
+        </div>
+        <div id="flow-table-body"></div>
+      </div>
+    </div>
+  </aside>
+
+</div>
+<script src="app.js"></script>
+</body>
+</html>
