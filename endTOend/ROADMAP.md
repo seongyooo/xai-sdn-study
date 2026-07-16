@@ -1,7 +1,8 @@
 # 시스템 개선 로드맵
 
-> 작성: 2026-07-15  
-> 현재 상태 기준 — 각 Stage별 한계와 개선 방향 정리
+> 작성: 2026-07-15 / 업데이트: 2026-07-16  
+> 현재 상태 기준 — 각 Stage별 한계와 개선 방향 정리  
+> `sdn_intent-framework` 비교 분석 반영
 
 ---
 
@@ -395,3 +396,175 @@ deployer.deploy(flowrule, dry_run=True)
 4. **iperf 대역폭 검증**: ping 기반 pass/fail보다 정량적인 QoS 검증
 
 이 중 **Rollback 정책 XAI + iperf Digital Twin** 두 가지만 추가해도 논문의 완성도가 크게 올라감.
+
+---
+
+## sdn_intent-framework 비교 분석 — 추가 보완 항목
+
+> `C:\Users\seonl\Desktop\c\2026\summer\sdn_intent-framework` 프로젝트와 비교하여 도출한 격차
+
+### 현재 프로젝트 우위
+
+| 항목 | 현재 프로젝트 | sdn_intent-framework |
+|------|-------------|---------------------|
+| Digital Twin | ✅ 실제 Mininet+ONOS 동작 | 설정 플래그만 존재 (미구현) |
+| 정적 충돌 탐지 | ✅ 5종 구현 | 미구현 |
+| ONOS 실배포 | ✅ Stage 6 | 미구현 |
+| XAI 설명 생성 | ✅ 실제 생성 | 미구현 |
+| Streamlit UI | ✅ 토폴로지 시각화 포함 | 없음 |
+
+### 추가 보완 필요 항목
+
+---
+
+#### [신규] B-1. 인텐트 거부(Rejection) 처리 — 🔴 높음
+
+**현재 문제**: 모호하거나 지원 불가한 인텐트도 무조건 IR 생성 시도. LLM이 잘못된 인텐트를 받으면 엉뚱한 FlowRule이 생성됨.
+
+**참조**: `sdn_intent-framework`의 `IntentPrediction`:
+```python
+status: Literal["accepted", "rejected"]
+rejection_reason: Literal["ambiguous", "contradictory", "unknown_entity", "unsupported"]
+```
+
+**현재 IntentIR에 추가할 것:**
+```python
+class IntentPrediction(BaseModel):
+    status: Literal["accepted", "rejected"]
+    program: Optional[IntentIR] = None       # accepted일 때
+    rejection_reason: Optional[str] = None   # rejected일 때
+    # "ambiguous" | "contradictory" | "unknown_entity" | "unsupported"
+```
+
+**처리 예시:**
+| 인텐트 | 거부 사유 |
+|--------|----------|
+| "optimize the network" | `ambiguous` — 구체적 동작 불명 |
+| "allow h1→h2 and block h1→h2" | `contradictory` — 모순 |
+| "block traffic from h9 to h10" | `unknown_entity` — 토폴로지에 없는 호스트 |
+| "set up MPLS tunnel from h1 to h4" | `unsupported` — 미지원 기능 |
+
+**Stage 1 파서 + Stage 5 XAI** 모두 수정 필요.
+
+---
+
+#### [신규] B-2. 토폴로지 그라운딩 — 🔴 높음
+
+**현재 문제**: LLM이 없는 호스트(`h9`), 없는 스위치(`switch 99`)를 생성해도 탐지 불가. Stage 3 정적 검증에서도 이를 잡지 못함.
+
+**참조**: `sdn_intent-framework`의 `topology.json`을 LLM 프롬프트에 주입:
+```json
+{
+  "entities": [
+    {"id": "host:h1", "aliases": ["h1", "10.0.0.1"]},
+    {"id": "host:h2", "aliases": ["h2", "10.0.0.2"]}
+  ],
+  "devices": [
+    {"id": "device:s1", "aliases": ["s1", "of:0000000000000001"]}
+  ],
+  "ports": {
+    "of:0000000000000001": [1, 2, 3, 4]
+  }
+}
+```
+
+**구현 위치**: `stage1_intent/intent_parser.py` 프롬프트 구성 시 ONOS에서 실시간 토폴로지 조회 후 주입.
+
+**장점**:
+- 환각(hallucination) 억제
+- `unknown_entity` 거부 사유 자동 판별 가능
+- 논문 기여로 직접 쓸 수 있음 ("인가된 인벤토리 기반 환각 억제")
+
+---
+
+#### [신규] B-3. 정량적 평가 프레임워크 — 🔴 높음
+
+**현재 문제**: 파이프라인이 얼마나 잘 동작하는지 측정하는 체계적 벤치마크 없음. 논문 5장 평가에서 수치 근거 부족.
+
+**참조**: `sdn_intent-framework`의 평가 지표:
+
+| 지표 | 의미 | 측정 방법 |
+|------|------|----------|
+| `normalized_exact_match` | IR 전체 일치율 | 예상 IR vs 실제 IR |
+| `slot_accuracy` | 필드별 정확도 | src/dst/action/device 등 개별 비교 |
+| `rejection_recall` | 거부해야 할 케이스 탐지율 | ambiguous 등 4종별 측정 |
+| `hallucination_rate` | 없는 엔티티 생성 비율 | 토폴로지 인벤토리 대비 |
+
+**구현 계획**:
+1. `Intent2Flow-ONOS.csv` 기반 **테스트셋 50개** 구성 (train/test 분리)
+2. `stage1_intent` 파싱 결과와 정답 IR 비교 스크립트 작성
+3. LLM 직접 생성 (baseline) vs IR+컴파일러 방식 비교
+4. 5회 반복 실행 → 평균 ± 표준편차 계산
+
+**논문 Table 형식 (5.1절)**:
+```
+| 방법           | Exact Match | Slot Acc. | Halluc. Rate |
+|----------------|-------------|-----------|--------------|
+| LLM Direct     |    62.0%    |   71.3%   |    18.4%     |
+| IR + Compiler  |    84.0%    |   91.2%   |     2.1%     |
+| + Grounding    |    89.0%    |   94.5%   |     0.0%     |
+```
+
+---
+
+#### [신규] B-4. Compound Intent (복합 인텐트) — 🟡 중간
+
+**현재 문제**: 단일 인텐트에서 항상 1개 FlowRule만 생성. 현실의 인텐트는 복수 룰이 필요한 경우가 많음.
+
+**예시**:
+```
+"allow web traffic from h1 to h2, but block SSH"
+→ FlowRule 1: allow TCP/80 (h1 → h2)
+→ FlowRule 2: block TCP/22 (h1 → h2)
+```
+
+**구현**:
+- `IntentIR`에 `rules: list[SingleRule]` 추가 (현재는 단일 룰 필드 flat)
+- 컴파일러가 `rules` 리스트를 순회하여 복수 flow 생성
+- 정적 검증은 생성된 복수 flow 간 충돌도 체크
+
+---
+
+#### [신규] B-5. Repair 루프 — 🟡 중간
+
+**현재 문제**: Stage 3 정적 검증 실패 → 즉시 REJECT. 자동 재시도 없음.
+
+**참조**: `sdn_intent-framework` 설정:
+```toml
+repair = true
+max_iterations = 3
+```
+
+**구현 흐름**:
+```
+Stage 1 → Stage 2 → Stage 3 실패
+  ↓
+오류 피드백 생성 ("Shadowing conflict with existing priority 40000 rule")
+  ↓
+Stage 1 재호출 (오류 포함 프롬프트)
+  ↓
+최대 3회 반복 → 성공하면 Stage 4로 진행
+```
+
+**논문 기여**: "자동 수정(Repair) 루프로 LLM 1회 호출 대비 파싱 성공률 X% 향상"
+
+---
+
+### 보완 항목 통합 우선순위
+
+기존 우선순위에 신규 항목 포함:
+
+| 순위 | 항목 | 난이도 | 논문 임팩트 |
+|------|------|--------|------------|
+| 🔴 1 | **B-2 토폴로지 그라운딩** | 낮음 | 환각 억제 — 프롬프트 수정만으로 즉시 효과 |
+| 🔴 2 | **B-3 정량 평가 프레임워크** | 중 | 논문 5장 수치 근거 필수 |
+| 🔴 3 | **B-1 Rejection 처리** | 중 | IR 설계 완성도 + 평가에 필요 |
+| 🔴 4 | **Stage 4 iperf 대역폭 검증** | 중 | Digital Twin 정밀도 |
+| 🔴 5 | **Stage 5 Rollback XAI 설명** | 중 | XAI 차별화 포인트 |
+| 🟡 6 | **Stage 1 SFC + reroute** | 중 | 인텐트 유형 다양화 |
+| 🟡 7 | **B-4 Compound Intent** | 중 | 지원 범위 확장 |
+| 🟡 8 | **Stage 5 Confidence 점수** | 중 | 정량 평가 지원 |
+| 🟡 9 | **B-5 Repair 루프** | 중 | 자동화 완성도 |
+| 🟢 10 | Stage 4 Rollback 정책 선택 | 중 | 운영 현실성 |
+| 🟢 11 | Stage 2 멀티-플로우 (reroute) | 높음 | 경로 최적화 |
+| 🟢 12 | Stage 6 배포 후 모니터링 | 중 | 완성도 |
