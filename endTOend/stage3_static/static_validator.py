@@ -67,9 +67,21 @@ def validate(
         schema_errors = schema_result["errors"]
 
     # ── Step 2: 충돌 탐지 (스키마가 유효할 때만) ──────────────
+    # Redundancy(중복 규칙)·Generalization(일반화 버전)은 무해하므로 경고로만 처리.
+    # Shadowing·Correlation·Imbrication만 실제 충돌(REJECT 사유)로 취급한다.
+    _WARNING_ONLY = {"Redundancy", "Generalization"}
+
     if not schema_errors and existing_flows:
         try:
-            conflicts = detect_conflict(flowrule, existing_flows)
+            all_detected = detect_conflict(flowrule, existing_flows)
+            for c in all_detected:
+                if c.get("conflict_type") in _WARNING_ONLY:
+                    warnings.append(
+                        f"[{c['conflict_type']}] {c.get('reason', '')} "
+                        f"(경고만, REJECT 사유 아님)"
+                    )
+                else:
+                    conflicts.append(c)
         except Exception as exc:
             warnings.append(f"충돌 탐지 중 오류 발생: {exc}")
 

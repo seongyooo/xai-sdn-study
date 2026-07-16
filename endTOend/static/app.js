@@ -26,6 +26,7 @@ const state = {
     elapsed: null,
     result: null,
     expanded: false,
+    progress_log: [],
   })),
   decision: null,
   decisionReport: null,
@@ -42,7 +43,7 @@ async function runPipeline() {
   state.decision = null;
   state.decisionReport = null;
   state.stages.forEach(s => {
-    s.status = 'idle'; s.elapsed = null; s.result = null; s.expanded = false;
+    s.status = 'idle'; s.elapsed = null; s.result = null; s.expanded = false; s.progress_log = [];
   });
   renderAllStages();
   renderDecision();
@@ -93,16 +94,31 @@ async function runPipeline() {
 }
 
 function handleSSEEvent(ev) {
-  if (ev.type === 'stage') {
+  if (ev.type === 'progress') {
+    const s = state.stages[ev.stage - 1];
+    s.progress_log.push(ev.msg);
+    appendLogLine(ev.stage, ev.msg);
+  } else if (ev.type === 'stage') {
     const s = state.stages[ev.stage - 1];
     s.status = ev.status;
     if (ev.elapsed != null) s.elapsed = ev.elapsed;
     if (ev.result != null) s.result = ev.result;
     if (ev.error != null) s.result = { error: ev.error };
+    // 에러 단계는 자동으로 펼쳐서 즉시 확인 가능하게
+    if (ev.status === 'error') s.expanded = true;
     renderStage(ev.stage - 1);
   } else if (ev.type === 'decision') {
     state.decision = ev.decision;
     state.decisionReport = ev.report;
+    // REJECT 시 실패한 단계 모두 자동 펼치기
+    if (ev.decision === 'REJECT') {
+      state.stages.forEach(s => {
+        if (s.status === 'error' || (s.status === 'done' && s.result && !s.result.passed)) {
+          s.expanded = true;
+          renderStage(s.num - 1);
+        }
+      });
+    }
     renderDecision();
   }
 }
@@ -167,6 +183,10 @@ function buildStageCards() {
         <div class="stage-time" id="time-${def.num}">—</div>
         <div class="stage-icon" id="icon-${def.num}">${iconDot()}</div>
       </div>
+      <div class="stage-progress" id="progress-${def.num}">
+        <div class="stage-progress-bar" id="progress-bar-${def.num}"></div>
+      </div>
+      <div class="live-log" id="live-${def.num}"></div>
       <div class="stage-detail" id="detail-${def.num}"></div>
     `;
     card.querySelector('.stage-header').addEventListener('click', () => {
@@ -185,11 +205,13 @@ function renderStage(i) {
   const s = state.stages[i];
   const n = s.num;
 
-  const card   = document.getElementById(`stage-${n}`);
-  const badge  = document.getElementById(`badge-${n}`);
-  const timeEl = document.getElementById(`time-${n}`);
-  const iconEl = document.getElementById(`icon-${n}`);
-  const detail = document.getElementById(`detail-${n}`);
+  const card    = document.getElementById(`stage-${n}`);
+  const badge   = document.getElementById(`badge-${n}`);
+  const timeEl  = document.getElementById(`time-${n}`);
+  const iconEl  = document.getElementById(`icon-${n}`);
+  const liveEl  = document.getElementById(`live-${n}`);
+  const detail  = document.getElementById(`detail-${n}`);
+  const progBar = document.getElementById(`progress-bar-${n}`);
 
   if (!card) return;
 
@@ -206,7 +228,31 @@ function renderStage(i) {
   // Icon
   iconEl.innerHTML = statusIcon(s.status);
 
-  // Detail
+  // Progress bar
+  if (progBar) {
+    progBar.className = 'stage-progress-bar';
+    if (s.status === 'running')  progBar.classList.add('bar-running');
+    else if (s.status === 'done')    progBar.classList.add('bar-done');
+    else if (s.status === 'error')   progBar.classList.add('bar-error');
+    else if (s.status === 'skipped') progBar.classList.add('bar-skipped');
+    // idle: no extra class → invisible
+  }
+
+  // Live log: running 중에만 표시, 완료 시 "current" 강조 해제
+  if (liveEl) {
+    if (s.status === 'running') {
+      liveEl.style.display = 'block';
+    } else {
+      liveEl.style.display = 'none';
+      // 완료 후 current 라인 일반화 (다음 실행 대비)
+      liveEl.querySelectorAll('.log-line.current').forEach(el => {
+        el.classList.remove('current');
+        el.classList.add('done');
+      });
+    }
+  }
+
+  // Detail (클릭 확장)
   if (s.expanded && s.result) {
     detail.className = 'stage-detail open';
     detail.textContent = JSON.stringify(s.result, null, 2);
@@ -455,6 +501,28 @@ function statusIcon(status) {
 
 function iconDot() {
   return `<div style="width:8px;height:8px;border-radius:50%;background:#374151;margin:auto"></div>`;
+}
+
+function appendLogLine(stageNum, msg) {
+  const el = document.getElementById(`live-${stageNum}`);
+  if (!el) return;
+
+  // 이전 current 라인 → done으로 강등
+  const prev = el.querySelector('.log-line.current');
+  if (prev) {
+    prev.classList.remove('current');
+    prev.classList.add('done');
+  }
+
+  // 새 라인 → current로 추가
+  const line = document.createElement('div');
+  line.className = 'log-line current';
+  if (msg.startsWith('✓')) line.classList.add('log-ok');
+  else if (msg.startsWith('✗')) line.classList.add('log-fail');
+  else if (msg.startsWith('⚠')) line.classList.add('log-warn');
+  line.textContent = msg;
+  el.appendChild(line);
+  el.scrollTop = el.scrollHeight;
 }
 
 function fillIntent(text) {
