@@ -98,8 +98,15 @@ class XAIExplainer:
         twin_summary = self._summarize_twin(twin_result)
 
         # ── 2. 결정 ───────────────────────────────────────────
-        twin_passed = twin_result.status in ("passed", "skipped")
-        decision = "APPROVE" if static_result.passed and twin_passed else "REJECT"
+        # APPROVE: 정적 검증 통과 + Digital Twin 실제 검증 통과
+        # APPROVE_WITHOUT_TWIN: 정적 검증 통과 + Twin 스킵 (미검증)
+        # REJECT: 정적 검증 실패 또는 Twin 실패
+        if not static_result.passed or twin_result.status in ("failed", "error"):
+            decision = "REJECT"
+        elif twin_result.status == "skipped":
+            decision = "APPROVE_WITHOUT_TWIN"
+        else:
+            decision = "APPROVE"
 
         # ── 3. 판정 근거 ──────────────────────────────────────
         decision_reason = self._build_decision_reason(
@@ -160,7 +167,15 @@ class XAIExplainer:
         priority = flow.get("priority", "?")
         criteria = flow.get("selector", {}).get("criteria", [])
         treatment = flow.get("treatment")
-        action_str = "DROP" if treatment is None else "FORWARD/QoS"
+        # NOACTION instruction 또는 treatment 없음 → DROP
+        # treatment is not None이어도 instructions=[{type:NOACTION}]이면 DROP
+        _instructions = (treatment or {}).get("instructions", [])
+        _is_drop = (
+            treatment is None
+            or not _instructions
+            or any(i.get("type") == "NOACTION" for i in _instructions)
+        )
+        action_str = "DROP" if _is_drop else "FORWARD/QoS"
 
         return (
             f"deviceId={device_id} | priority={priority} | "

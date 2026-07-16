@@ -65,8 +65,9 @@ def extract_device_id(device_hint: str) -> str:
     if re.match(r"^of:[0-9a-f]{16}$", hint, re.IGNORECASE):
         return hint.lower()
 
-    # 숫자 직접 추출 (예: "switch 4", "s4", "node 2")
-    num_match = re.search(r"\b(\d+)\b", hint)
+    # 숫자 직접 추출 (예: "switch 4", "s4", "sw2", "node 2")
+    # \b 대신 (\d+) 사용 — "s2" 같은 경우 's'와 '2' 사이에 단어 경계가 없음
+    num_match = re.search(r"(\d+)", hint)
     if num_match:
         num = int(num_match.group(1))
         return f"of:{num:016x}"

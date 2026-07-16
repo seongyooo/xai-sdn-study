@@ -439,7 +439,18 @@ if run_btn and intent.strip():
     with st.status("**Stage 3** — 정적 검증", expanded=True) as s3:
         try:
             from stage3_static.static_validator import validate as static_validate
-            static_result = static_validate(flowrule, existing_flows=None)
+
+            # ONOS 기존 플로우 조회 (충돌 탐지용) — 연결 실패 시 None으로 스킵
+            existing_flows = None
+            try:
+                from stage4_twin.onos_client import OnosClient
+                existing_flows = OnosClient().flows()
+                if existing_flows:
+                    st.caption(f"ONOS 기존 FlowRule {len(existing_flows)}개 로드 → 충돌 탐지 활성화")
+            except Exception:
+                st.caption("ONOS 미연결 — 기존 FlowRule 없이 스키마 검증만 수행")
+
+            static_result = static_validate(flowrule, existing_flows=existing_flows)
             summary = static_result.summary()
 
             pipeline_result["stage3"] = {
@@ -553,6 +564,8 @@ if run_btn and intent.strip():
 
             if decision == "APPROVE":
                 st.success(f"### ✅ {decision}")
+            elif decision == "APPROVE_WITHOUT_TWIN":
+                st.warning(f"### ⚠️ {decision}  (Digital Twin 미검증)")
             else:
                 st.error(f"### ❌ {decision}")
 
@@ -573,7 +586,7 @@ if run_btn and intent.strip():
             st.stop()
 
     # ── Stage 6 ───────────────────────────────────────────────────
-    if decision == "APPROVE" and not skip_deploy:
+    if decision in ("APPROVE", "APPROVE_WITHOUT_TWIN") and not skip_deploy:
         with st.status("**Stage 6** — ONOS 배포", expanded=True) as s6:
             try:
                 from stage6_deploy.deployer import Deployer
@@ -599,7 +612,7 @@ if run_btn and intent.strip():
                 pipeline_result["stage6"] = {"error": str(exc)}
                 s6.update(label="**Stage 6** — ONOS 배포 ❌", state="error")
 
-    elif decision == "APPROVE" and skip_deploy:
+    elif decision in ("APPROVE", "APPROVE_WITHOUT_TWIN") and skip_deploy:
         pipeline_result["stage6"] = {"status": "skipped", "reason": "UI에서 스킵 선택"}
         st.info("⏭️ ONOS 배포 스킵 (설정에서 활성화 가능)")
     else:
@@ -627,7 +640,8 @@ if run_btn and intent.strip():
 elif "last_pipeline_result" in st.session_state:
     result = st.session_state["last_pipeline_result"]
     st.divider()
-    decision_icon = "✅" if result.get("decision") == "APPROVE" else "❌"
+    _dec = result.get("decision", "")
+    decision_icon = "✅" if _dec == "APPROVE" else ("⚠️" if _dec == "APPROVE_WITHOUT_TWIN" else "❌")
     st.subheader(f"📋 최근 실행 결과  `{result.get('run_id', '')}`")
     st.caption(f"인텐트: {result.get('intent', '')}")
 

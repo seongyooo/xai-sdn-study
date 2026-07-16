@@ -174,7 +174,17 @@ def main() -> int:
 
     try:
         from stage3_static.static_validator import validate as static_validate
-        static_result = static_validate(flowrule, existing_flows=None)
+
+        # ONOS에서 기존 FlowRule 가져와 충돌 탐지에 활용 (연결 실패 시 스킵)
+        existing_flows: list | None = None
+        try:
+            from stage4_twin.onos_client import OnosClient
+            existing_flows = OnosClient().flows()
+        except Exception as _onos_exc:
+            if args.verbose:
+                print(f"  ONOS 기존 플로우 조회 실패 (충돌 탐지 스킵): {_onos_exc}")
+
+        static_result = static_validate(flowrule, existing_flows=existing_flows)
 
     except Exception as exc:
         print(f"  오류: {exc}")
@@ -263,7 +273,7 @@ def main() -> int:
     decision = xai_report.decision
 
     # ── Stage 6: ONOS 배포 ───────────────────────────────────
-    if decision == "APPROVE" and not args.skip_deploy:
+    if decision in ("APPROVE", "APPROVE_WITHOUT_TWIN") and not args.skip_deploy:
         _print_stage(6, "ONOS 배포")
         try:
             from stage6_deploy.deployer import Deployer
@@ -279,7 +289,7 @@ def main() -> int:
             print(f"  배포 오류: {exc}")
             pipeline_result["stage6"] = {"error": str(exc)}
 
-    elif decision == "APPROVE" and args.skip_deploy:
+    elif decision in ("APPROVE", "APPROVE_WITHOUT_TWIN") and args.skip_deploy:
         _print_stage(6, "ONOS 배포")
         print("  (skipped: --skip-deploy 플래그)")
         pipeline_result["stage6"] = {"status": "skipped", "reason": "--skip-deploy 플래그"}
@@ -298,9 +308,11 @@ def main() -> int:
     # ── 최종 출력 ────────────────────────────────────────────
     _print_footer(decision, log_path)
 
-    # 종료 코드
+    # 종료 코드 (0=APPROVE, 1=APPROVE_WITHOUT_TWIN, 2=REJECT)
     if decision == "APPROVE":
         return 0
+    elif decision == "APPROVE_WITHOUT_TWIN":
+        return 1
     else:
         return 2
 
