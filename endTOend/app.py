@@ -31,14 +31,6 @@ st.set_page_config(
     layout="wide",
 )
 
-# ── 10초 자동 갱신 (토폴로지 실시간 업데이트) ────────────────────
-try:
-    from streamlit_autorefresh import st_autorefresh
-    _refresh_count = st_autorefresh(interval=10_000, key="autorefresh")
-except ImportError:
-    _refresh_count = 0
-    st.sidebar.caption("💡 `pip install streamlit-autorefresh` 로 토폴로지 자동 갱신 활성화")
-
 st.title("🌐 XAI SDN Pipeline")
 st.caption("자연어 네트워크 인텐트 → FlowRule 자동 생성 · 검증 · 배포")
 
@@ -260,12 +252,12 @@ def _draw_topology(devices, hosts, links, flow_rows):
 st.divider()
 
 
-@st.fragment
+@st.fragment(run_every=10)
 def show_topology() -> None:
     """
     ONOS 토폴로지 + FlowRule 오버레이.
-    페이지 자동 갱신(st_autorefresh)과 함께 동작 — fragment 자체는 독립 리런 없음.
-    🔄 버튼은 fragment 내부 → 클릭 시 fragment만 리런 (파이프라인 상태 유지).
+    run_every=10: fragment만 10초마다 독립 rerun → 메인 페이지(파이프라인 실행)는 영향 없음.
+    🔄 버튼은 fragment 내부 → 클릭 시 즉시 갱신.
     """
     try:
         import networkx as nx   # noqa: F401
