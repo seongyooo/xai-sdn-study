@@ -16,27 +16,45 @@ if TYPE_CHECKING:
 SYSTEM_PROMPT = """You are an SDN network intent parser.
 Extract the user's network intent into a structured JSON with these fields:
 {
-  "action": "forward" | "block" | "qos",
+  "action": "forward" | "block" | "qos" | "sfc" | "reroute",
   "device_hint": "<switch name or number as mentioned>",
-  "src_ip": "<CIDR or null>",
-  "dst_ip": "<CIDR or null>",
+  "src_ip": "<x.x.x.x/mask or null>",
+  "dst_ip": "<x.x.x.x/mask or null>",
   "src_port": <int or null>,
   "dst_port": <int or null>,
   "ip_proto": "tcp" | "udp" | "icmp" | null,
   "out_port": <int or null>,
   "in_port": <int or null>,
+  "alt_out_port": <int or null>,
+  "waypoints": ["<device:port>" ...] | null,
+  "via_device": "<switch name>" | null,
+  "avoid_device": "<switch name>" | null,
   "priority": <int or null>,
   "vlan_id": <int or null>,
   "queue_id": <int or null>,
   "eth_type": "ipv4" | "ipv6" | "arp" | null
 }
 
-Rules:
-- action=block if intent is about dropping/blocking/denying
-- action=forward if intent is about routing/forwarding/sending
-- action=qos if intent mentions queue or QoS
-- If IP is mentioned without mask, add /32
-- Respond in JSON only."""
+Action rules:
+- action=block   : dropping/blocking/denying traffic
+- action=forward : routing/forwarding/sending to a destination
+- action=qos     : quality of service, queue assignment, prioritization
+- action=sfc     : service function chaining — traffic must pass through a middlebox,
+                   firewall, IDS, or inspection point before reaching destination.
+                   out_port = the waypoint device port number (e.g. port 9 for firewall).
+                   alt_out_port = egress port after returning from the waypoint.
+                   waypoints = list of "switch:port" waypoint identifiers.
+- action=reroute : path redirection, failover, bypass — sending traffic via an
+                   alternative switch or port. out_port or alt_out_port = the new
+                   egress port. via_device = intermediate switch to route through.
+                   avoid_device = switch to bypass.
+
+Field rules:
+- If IP is mentioned without mask, append /32
+- src_ip/dst_ip must be numeric IPv4 (x.x.x.x), never a hostname
+- For sfc: set out_port to the waypoint port number mentioned (e.g. "port 9" → 9)
+- For reroute: set out_port to the new egress port mentioned
+- Respond in JSON only, no explanation."""
 
 
 class IntentParser:

@@ -15,7 +15,7 @@ from pydantic import BaseModel, field_validator
 class IntentIR(BaseModel):
     """SDN 인텐트의 구조화된 중간 표현"""
 
-    action: Literal["forward", "block", "qos"]
+    action: Literal["forward", "block", "qos", "sfc", "reroute"]
     device_hint: str  # "switch 4", "node 2" 등 자연어 힌트
 
     # 5-튜플 매칭 필드
@@ -26,8 +26,16 @@ class IntentIR(BaseModel):
     ip_proto: Optional[Literal["tcp", "udp", "icmp"]] = None
 
     # 포트 정보
-    out_port: Optional[int] = None     # forward/qos 시 출력 포트
+    out_port: Optional[int] = None     # forward/qos/sfc 시 출력 포트 (sfc에서는 waypoint 포트)
     in_port: Optional[int] = None      # 입력 포트 매칭
+    alt_out_port: Optional[int] = None # sfc 웨이포인트 이후 출력 포트 / reroute 새 출력 포트
+
+    # SFC 전용
+    waypoints: Optional[list] = None   # ["switch 1:9", "switch 2"] — 경유 지점
+
+    # Reroute 전용
+    via_device: Optional[str] = None   # "switch 2" — 경유 스위치
+    avoid_device: Optional[str] = None # "switch 3" — 회피 스위치
 
     # QoS / 우선순위
     priority: Optional[int] = None
@@ -71,12 +79,16 @@ class IntentIR(BaseModel):
         """
         # action 정규화
         action_raw = str(raw.get("action", "forward")).lower().strip()
-        if action_raw not in ("forward", "block", "qos"):
+        if action_raw not in ("forward", "block", "qos", "sfc", "reroute"):
             # 의미적 매핑
             if any(w in action_raw for w in ("drop", "deny", "block", "reject")):
                 action_raw = "block"
             elif any(w in action_raw for w in ("queue", "qos", "quality")):
                 action_raw = "qos"
+            elif any(w in action_raw for w in ("chain", "sfc", "waypoint", "inspect", "middlebox")):
+                action_raw = "sfc"
+            elif any(w in action_raw for w in ("reroute", "redirect", "failover", "bypass")):
+                action_raw = "reroute"
             else:
                 action_raw = "forward"
 
@@ -128,6 +140,13 @@ class IntentIR(BaseModel):
                     f"IP 주소(예: 10.0.0.1)를 포함한 인텐트를 입력해주세요."
                 )
 
+        # waypoints: list 또는 null
+        waypoints_raw = raw.get("waypoints")
+        if waypoints_raw and isinstance(waypoints_raw, list):
+            waypoints = [str(w) for w in waypoints_raw if w]
+        else:
+            waypoints = None
+
         return cls(
             action=action_raw,
             device_hint=device_hint,
@@ -138,6 +157,10 @@ class IntentIR(BaseModel):
             ip_proto=proto_raw,
             out_port=_safe_int(raw.get("out_port")),
             in_port=_safe_int(raw.get("in_port")),
+            alt_out_port=_safe_int(raw.get("alt_out_port")),
+            waypoints=waypoints,
+            via_device=str(raw["via_device"]).strip() if raw.get("via_device") else None,
+            avoid_device=str(raw["avoid_device"]).strip() if raw.get("avoid_device") else None,
             priority=_safe_int(raw.get("priority")),
             vlan_id=_safe_int(raw.get("vlan_id")),
             queue_id=_safe_int(raw.get("queue_id")),

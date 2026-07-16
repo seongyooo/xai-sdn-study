@@ -1,16 +1,17 @@
 """
-evaluate.py — 100-case 배치 평가 스크립트
+evaluate.py — 배치 평가 스크립트
 
-sdn_intent-framework/experiments/e1/data/intents.jsonl 을 읽어
+endTOend/data/intents_v2.jsonl 을 읽어
 Stage 1 (LLM 파싱) + Stage 2 (FlowRule 컴파일) 를 전수 실행하고
 slot_accuracy / hallucination_rate / compile_success_rate 를 측정한다.
 
 사용법:
     cd endTOend/
-    python evaluate.py                        # 전체 100케이스
+    python evaluate.py                        # 전체 케이스
     python evaluate.py --limit 10             # 첫 10케이스만 (빠른 테스트)
     python evaluate.py --skip-llm             # LLM 없이 컴파일러만 테스트
     python evaluate.py --output results.csv   # CSV 저장 경로 지정
+    python evaluate.py --category sfc         # 특정 카테고리만 평가
 """
 from __future__ import annotations
 
@@ -31,10 +32,7 @@ if str(_BASE_DIR) not in sys.path:
 import config
 
 # ── 데이터셋 경로 ─────────────────────────────────────────────────
-_DEFAULT_DATASET = (
-    Path(r"C:\Users\seonl\Desktop\c\2026\summer\sdn_intent-framework")
-    / "experiments" / "e1" / "data" / "intents.jsonl"
-)
+_DEFAULT_DATASET = _BASE_DIR / "data" / "intents_v2.jsonl"
 
 
 # ── IntentProgram → IntentIR 필드 매핑 ───────────────────────────
@@ -43,6 +41,8 @@ def _expected_ir(entry: dict) -> dict:
     """
     intents.jsonl의 expected.program.rules[0]를 IntentIR 비교용 dict로 변환.
     rejection 케이스는 None 반환.
+
+    SFC/Reroute는 rules[0] (ingress rule)을 기준으로 평가한다.
     """
     expected = entry.get("expected", {})
     if expected.get("status") != "accepted":
@@ -58,10 +58,15 @@ def _expected_ir(entry: dict) -> dict:
     enforcement = rule.get("enforcement") or {}
     qos = rule.get("qos") or {}
 
-    # action 매핑
+    # action 매핑 — intent_type과 action 필드를 함께 고려
     intent_type = rule.get("intent_type", "")
     action_raw = rule.get("action", "")
-    if intent_type == "security" or action_raw == "deny":
+
+    if intent_type == "sfc":
+        action = "sfc"
+    elif intent_type == "reroute":
+        action = "reroute"
+    elif intent_type == "security" or action_raw == "deny":
         action = "block"
     elif intent_type == "qos" or action_raw == "prioritize":
         action = "qos"
@@ -85,7 +90,7 @@ def _expected_ir(entry: dict) -> dict:
 
     return {
         "action": action,
-        "device_num": device_num,                          # int (1~4)
+        "device_num": device_num,                          # int (1~4) or None
         "src_ip": src_ip,
         "dst_ip": dst_ip,
         "ip_proto": selector.get("protocol"),              # "tcp"/"udp"/"icmp"/None
@@ -169,6 +174,7 @@ def evaluate(
     rag_k: int,
     output_path: Path,
     verbose: bool,
+    category_filter: Optional[str] = None,
 ) -> None:
 
     # 데이터 로드
@@ -178,11 +184,16 @@ def evaluate(
             line = line.strip()
             if line:
                 entries.append(json.loads(line))
+
+    # 카테고리 필터
+    if category_filter:
+        entries = [e for e in entries if e.get("category") == category_filter]
+
     if limit:
         entries = entries[:limit]
 
     print(f"데이터셋: {dataset_path}")
-    print(f"총 케이스: {len(entries)}개 (limit={limit})")
+    print(f"총 케이스: {len(entries)}개 (limit={limit}, category={category_filter or 'all'})")
     print(f"모델: {model} | RAG k={rag_k} | skip_llm={skip_llm}")
     print("=" * 60)
 
@@ -258,9 +269,9 @@ def evaluate(
             print(f"[{eid}] SKIP (rejection) — {instruction[:60]}")
             continue
 
-        # compound 케이스: rules > 1 → 현재 파이프라인 미지원
-        rules = (entry.get("expected", {}).get("program") or {}).get("rules", [])
-        if len(rules) > 1:
+        # compound 케이스(category="compound"): 다중 독립 인텐트 → 미지원
+        # SFC/Reroute는 rules > 1이어도 단일 인텐트이므로 스킵하지 않음
+        if category == "compound":
             skipped_compound += 1
             row["parse_status"] = "compound_skip"
             rows.append(row)
@@ -403,6 +414,11 @@ def main() -> int:
         help="결과 CSV 저장 경로",
     )
     parser.add_argument("--verbose", action="store_true", help="케이스별 상세 출력")
+    parser.add_argument(
+        "--category",
+        default=None,
+        help="평가할 카테고리 (forwarding/security/qos/sfc/reroute/all)",
+    )
     args = parser.parse_args()
 
     if not args.dataset.exists():
@@ -419,6 +435,7 @@ def main() -> int:
         rag_k=args.rag_k,
         output_path=args.output,
         verbose=args.verbose,
+        category_filter=args.category if args.category != "all" else None,
     )
     return 0
 
