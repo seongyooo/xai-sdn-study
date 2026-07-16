@@ -1,9 +1,12 @@
 """
 generate_dataset.py — 신규 50케이스 생성 스크립트
 
-기존 100케이스(sdn_intent-framework)를 복사하고
-SFC 25케이스 + Reroute 25케이스를 추가하여
-endTOend/data/intents_v2.jsonl (150케이스)을 생성한다.
+sdn_intent-framework의 project_authored 50케이스 (직접 작성분)와
+신규 SFC 25케이스 + Reroute 25케이스를 합쳐
+endTOend/data/intents_v2.jsonl (100케이스)을 생성한다.
+
+※ cohort="upstream" 케이스(NetIntent 라이선스)는 의도적으로 제외한다.
+  upstream 데이터는 sdn_intent-framework 레포에서만 참조한다.
 
 토폴로지 (topology.py 기반):
   s1 (of:0000000000000001): port1→s2(slow), port2→s3(fast), port3→h1, port4→h2, port9→firewall
@@ -16,7 +19,7 @@ endTOend/data/intents_v2.jsonl (150케이스)을 생성한다.
 사용법:
     cd endTOend/
     python data/generate_dataset.py
-    # → endTOend/data/intents_v2.jsonl 생성
+    # → endTOend/data/intents_v2.jsonl 생성 (100케이스)
 """
 from __future__ import annotations
 
@@ -474,27 +477,32 @@ def _reroute_cases() -> list[dict]:
 # ── 메인 ──────────────────────────────────────────────────────────
 
 def main() -> int:
-    # 1. 기존 100케이스 읽기
+    # 1. project_authored 케이스만 읽기 (upstream 제외)
     if not _SOURCE_JSONL.exists():
         print(f"오류: 기존 데이터셋을 찾을 수 없습니다: {_SOURCE_JSONL}", file=sys.stderr)
         return 1
 
-    existing: list[dict] = []
+    all_existing: list[dict] = []
     with open(_SOURCE_JSONL, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if line:
-                existing.append(json.loads(line))
+                all_existing.append(json.loads(line))
 
-    print(f"기존 케이스: {len(existing)}개")
+    upstream = [e for e in all_existing if e.get("cohort") == "upstream"]
+    project_authored = [e for e in all_existing if e.get("cohort") == "project_authored"]
+
+    print(f"소스 전체: {len(all_existing)}개")
+    print(f"  upstream (NetIntent 라이선스, 제외): {len(upstream)}개")
+    print(f"  project_authored (포함): {len(project_authored)}개")
 
     # 2. 신규 50케이스 생성
     new_cases = _sfc_cases() + _reroute_cases()
     print(f"신규 케이스: {len(new_cases)}개 (SFC {len(_sfc_cases())} + Reroute {len(_reroute_cases())})")
 
-    # 3. 합치기
-    all_cases = existing + new_cases
-    print(f"총 케이스: {len(all_cases)}개")
+    # 3. project_authored + 신규만 합치기
+    all_cases = project_authored + new_cases
+    print(f"총 케이스: {len(all_cases)}개 (upstream 제외)")
 
     # 4. 출력
     _OUTPUT_JSONL.parent.mkdir(parents=True, exist_ok=True)
