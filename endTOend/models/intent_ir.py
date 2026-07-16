@@ -85,7 +85,7 @@ class IntentIR(BaseModel):
                 action_raw = "block"
             elif any(w in action_raw for w in ("queue", "qos", "quality")):
                 action_raw = "qos"
-            elif any(w in action_raw for w in ("chain", "sfc", "waypoint", "inspect", "middlebox")):
+            elif any(w in action_raw for w in ("chain", "sfc", "waypoint", "middlebox")):
                 action_raw = "sfc"
             elif any(w in action_raw for w in ("reroute", "redirect", "failover", "bypass")):
                 action_raw = "reroute"

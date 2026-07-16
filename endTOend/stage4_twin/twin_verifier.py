@@ -93,6 +93,13 @@ class TwinVerifier:
             password=self.onos_password,
         )
 
+        # SFC 인텐트: waypoint 경유 테스트는 실제 방화벽 장치 없이 검증 불가 → skip
+        if flowrule.get("sfc_chain"):
+            return TwinResult(
+                status="skipped",
+                reason="SFC 인텐트는 Digital Twin에서 waypoint 장치 없이 검증 불가",
+            )
+
         # FlowRule에서 action 추출
         flows = flowrule.get("flows", [])
         flow = flows[0] if flows else {}
@@ -176,12 +183,13 @@ class TwinVerifier:
             # ── 5. FlowRule 배포 ───────────────────────────
             print("    [Twin] FlowRule 배포 중...")
             client.deploy_flow_rules(flowrule)
-            # flow가 OVS에 실제 push될 때까지 대기 (ADDED 상태 확인)
-            client.wait_for_flow(
-                device_id=flow.get("deviceId", "of:0000000000000001"),
-                priority=flow.get("priority", 50000),
-                timeout=15.0,
-            )
+            # 모든 flows가 OVS에 push될 때까지 대기 (B7 fix: flows[0]만 대기하던 버그)
+            for f in flows:
+                client.wait_for_flow(
+                    device_id=f.get("deviceId", "of:0000000000000001"),
+                    priority=f.get("priority", 50000),
+                    timeout=15.0,
+                )
 
             # ── 6. intent 동작 확인 ────────────────────────
             # block이면 ping 실패, forward이면 ping 성공

@@ -135,6 +135,8 @@ class XAIExplainer:
             "block": "차단",
             "forward": "전달",
             "qos": "QoS 처리",
+            "sfc": "서비스 체인",
+            "reroute": "경로 변경",
         }
         action_str = action_map.get(ir.action, ir.action)
         device_str = ir.device_hint

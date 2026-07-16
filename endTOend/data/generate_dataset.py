@@ -122,7 +122,7 @@ def _entry(
 ) -> dict:
     return {
         "id": case_id,
-        "cohort": "project",
+        "cohort": "project_authored",  # D6 fix: project_authored로 통일
         "category": category,
         "variation": variation,
         "instruction": instruction,
@@ -291,45 +291,51 @@ def _sfc_cases() -> list[dict]:
     # ── SFC-C: SFC + Security 결합 (5케이스) ─────────────────────
 
     sfc_c_defs = [
+        # (id, instruction, rules, sfc_chain)
         ("SFC-C01",
          "Inspect traffic from 10.0.0.1 to 10.0.0.4 through port 9 of switch 1; drop if malicious.",
          [
              _sfc_rule(_sel("10.0.0.1", "10.0.0.4"), 1, "9", "ingress"),
              _sfc_rule(_sel(dst_ip="10.0.0.4", ingress_port=9), 1, "1", "egress"),
-         ]),
+         ],
+         [f"{_dev(1)}:9"]),
         ("SFC-C02",
          "Route SMTP from 10.0.0.2 to 10.0.0.3 through the firewall; block if it fails inspection.",
          [
              _sfc_rule(_sel("10.0.0.2", "10.0.0.3", protocol="tcp", dst_port=25),
                        1, "9", "ingress"),
              _sfc_rule(_sel(dst_ip="10.0.0.3", ingress_port=9), 1, "1", "egress"),
-         ]),
+         ],
+         [f"{_dev(1)}:9"]),
         ("SFC-C03",
          "Chain HTTP traffic from 10.0.0.1 through switch 2 IDS; forward clean traffic to 10.0.0.4.",
          [
              _sfc_rule(_sel("10.0.0.1", "10.0.0.4", protocol="tcp", dst_port=80),
                        1, "1", "ingress"),
              _sfc_rule(_sel(dst_ip="10.0.0.4"), 2, "2", "egress"),
-         ]),
+         ],
+         [f"{_dev(2)}"]),   # B5 fix: s2를 체인으로 사용, s1:9 아님
         ("SFC-C04",
          "Apply security inspection on switch 1 port 9 for all traffic from 10.0.0.1 to 10.0.0.4.",
          [
              _sfc_rule(_sel("10.0.0.1", "10.0.0.4"), 1, "9", "ingress"),
              _sfc_rule(_sel(dst_ip="10.0.0.4", ingress_port=9), 1, "1", "egress"),
-         ]),
+         ],
+         [f"{_dev(1)}:9"]),
         ("SFC-C05",
          "Send SSH from 10.0.0.1 through firewall at switch 1 port 9 before allowing to 10.0.0.4.",
          [
              _sfc_rule(_sel("10.0.0.1", "10.0.0.4", protocol="tcp", dst_port=22),
                        1, "9", "ingress"),
              _sfc_rule(_sel(dst_ip="10.0.0.4", ingress_port=9), 1, "1", "egress"),
-         ]),
+         ],
+         [f"{_dev(1)}:9"]),
     ]
 
-    for case_id, instr, rules in sfc_c_defs:
+    for case_id, instr, rules, chain in sfc_c_defs:
         cases.append(_entry(
             case_id, "sfc", "sfc_security", instr,
-            _accepted(rules, sfc_chain=[f"{_dev(1)}:9"]),
+            _accepted(rules, sfc_chain=chain),
         ))
 
     return cases

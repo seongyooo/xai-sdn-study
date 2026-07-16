@@ -45,13 +45,13 @@ def _check_rule(rule: dict, rule_idx: int, case_id: str) -> list[str]:
     return errors
 
 
-def validate(path: Path, strict: bool = False) -> int:
+def validate(path: Path) -> int:
     """
     데이터셋 검증.
 
     Returns:
         0 — 검증 통과 (경고 있어도 OK)
-        1 — 오류 발생 (strict 모드에서 exit code로 사용)
+        1 — 오류 발생
     """
     if not path.exists():
         print(f"오류: 파일이 없습니다: {path}", file=sys.stderr)
@@ -188,7 +188,7 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    result = validate(Path(args.path), strict=args.strict)
+    result = validate(Path(args.path))
     if args.strict:
         return result
     return 0

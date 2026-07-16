@@ -99,12 +99,22 @@ def _build_criteria(
         skip_src_ip: IPV4_SRC criteria를 생략할지 여부 (SFC egress rule 등)
     """
     criteria: list[dict] = []
-    eth_type_key = ir.eth_type or "ipv4"
+    eth_type_key = ir.eth_type  # None이면 ETH_TYPE criterion 생략
 
-    criteria.append({
-        "type": "ETH_TYPE",
-        "ethType": ETH_TYPE_MAP.get(eth_type_key, "0x800"),
-    })
+    # eth_type이 명시된 경우에만 ETH_TYPE criterion 추가
+    # (port-only 룰에서 IPv4 한정 불필요한 제한 방지 — D10 fix)
+    if eth_type_key:
+        criteria.append({
+            "type": "ETH_TYPE",
+            "ethType": ETH_TYPE_MAP.get(eth_type_key, "0x800"),
+        })
+    elif ir.src_ip or ir.dst_ip or ir.ip_proto:
+        # IP/프로토콜 필드가 있으면 ETH_TYPE 0x800 (IPv4) 암묵적으로 추가
+        eth_type_key = "ipv4"
+        criteria.append({
+            "type": "ETH_TYPE",
+            "ethType": "0x800",
+        })
 
     in_port = in_port_override if in_port_override is not None else ir.in_port
     if in_port is not None:
@@ -118,6 +128,9 @@ def _build_criteria(
             criteria.append({"type": "IPV4_SRC", "ip": ir.src_ip})
         if ir.dst_ip:
             criteria.append({"type": "IPV4_DST", "ip": ir.dst_ip})
+    elif eth_type_key is not None and ir.src_ip and not skip_src_ip:
+        # ipv6/arp 등 기타 eth_type에서도 IP 필드 처리 (현재 미사용이지만 안전하게)
+        pass
 
     if ir.ip_proto:
         criteria.append({"type": "IP_PROTO", "protocol": IP_PROTO_MAP[ir.ip_proto]})
@@ -215,10 +228,10 @@ def compile_flowrule(ir: IntentIR) -> dict:
         return {"flows": [_make_flow(device_id, priority, criteria, treatment)]}
 
     # ── reroute ───────────────────────────────────────────────
-    # reroute는 forward와 동일하되, alt_out_port를 우선 사용
+    # reroute는 forward와 동일하되, alt_out_port를 우선 사용 (B2 fix: is not None 비교)
     elif ir.action == "reroute":
         criteria = _build_criteria(ir)
-        out_port = ir.alt_out_port or ir.out_port
+        out_port = ir.alt_out_port if ir.alt_out_port is not None else ir.out_port
         out = str(out_port) if out_port is not None else "NORMAL"
         treatment = {"instructions": [{"type": "OUTPUT", "port": out}]}
         return {"flows": [_make_flow(device_id, priority, criteria, treatment)]}
@@ -238,8 +251,13 @@ def compile_flowrule(ir: IntentIR) -> dict:
         ingress_flow = _make_flow(device_id, priority, ingress_criteria, ingress_treatment)
 
         # egress rule: waypoint에서 복귀 → 목적지로 전송
-        # alt_out_port가 있으면 사용, 없으면 NORMAL
-        alt_port = str(ir.alt_out_port) if ir.alt_out_port is not None else "NORMAL"
+        # alt_out_port 미지정 시 CompileError — NORMAL은 운영상 위험 (D2 fix)
+        if ir.alt_out_port is None:
+            raise CompileError(
+                "sfc action requires alt_out_port (egress port after waypoint). "
+                "e.g. firewall at port 9, then forward to h1 -> alt_out_port=3"
+            )
+        alt_port = str(ir.alt_out_port)
         egress_criteria = _build_criteria(
             ir,
             in_port_override=int(waypoint_port),

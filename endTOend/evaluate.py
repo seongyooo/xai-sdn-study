@@ -135,13 +135,22 @@ def _ir_to_comparable(ir) -> dict:
 SLOT_FIELDS = ["action", "device_num", "src_ip", "dst_ip", "ip_proto", "dst_port"]
 
 def _slot_scores(pred: dict, gold: dict) -> dict[str, bool]:
-    """각 슬롯의 정답 여부를 반환"""
+    """
+    각 슬롯의 정답 여부를 반환.
+
+    device_num: gold가 None(enforcement:null인 project_authored 케이스)이면
+    해당 슬롯을 비교 불가 → True(정답으로 처리)로 표시하고 집계에서 제외하기 위해
+    별도 플래그를 사용하지 않고 gold==None인 device_num은 점수 계산에서 제외된다.
+    (hallucination과 분리되어 있음 — B4 fix)
+    """
     scores = {}
     for field in SLOT_FIELDS:
         p = pred.get(field)
         g = gold.get(field)
-        # None vs None → correct
-        # 문자열 비교는 소문자 정규화
+        # device_num이 gold=None이면 비교 불가 → 슬롯 스킵 마커로 None 반환
+        if field == "device_num" and g is None:
+            scores[field] = None  # 집계 시 제외
+            continue
         if isinstance(p, str):
             p = p.lower()
         if isinstance(g, str):
@@ -153,13 +162,16 @@ def _slot_scores(pred: dict, gold: dict) -> dict[str, bool]:
 def _hallucination_score(pred: dict, gold: dict) -> dict[str, bool]:
     """
     gold가 None인 필드에 pred가 값을 넣으면 hallucination.
-    각 필드별 hallucination 여부 반환.
+    단, device_num은 enforcement:null 케이스에서 gold=None이 정상이므로
+    hallucination 집계에서 제외한다. (B4 fix)
     """
     result = {}
     for field in SLOT_FIELDS:
+        if field == "device_num":
+            result[field] = False  # device_num은 hallucination 집계 제외
+            continue
         gold_val = gold.get(field)
         pred_val = pred.get(field)
-        # gold=None인데 pred가 값을 가짐 → hallucination
         result[field] = (gold_val is None and pred_val is not None)
     return result
 
@@ -188,6 +200,10 @@ def evaluate(
     # 카테고리 필터
     if category_filter:
         entries = [e for e in entries if e.get("category") == category_filter]
+        if not entries:
+            print(f"경고: category='{category_filter}'에 해당하는 케이스가 없습니다.")
+            print("사용 가능한 카테고리: forwarding, security, qos, sfc, reroute, ambiguous_unsupported")
+            return
 
     if limit:
         entries = entries[:limit]
@@ -299,24 +315,29 @@ def evaluate(
                 # 슬롯 비교
                 slot_scores = _slot_scores(pred, gold)
                 halluc_scores = _hallucination_score(pred, gold)
-                n_correct = sum(slot_scores.values())
+                # None은 비교 불가 슬롯 (device_num + enforcement:null) → 집계 제외
+                n_correct = sum(v for v in slot_scores.values() if v is not None)
+                n_comparable = sum(1 for v in slot_scores.values() if v is not None)
                 n_halluc = sum(halluc_scores.values())
                 n_fields = len(SLOT_FIELDS)
 
-                row["slot_accuracy"] = f"{n_correct}/{n_fields}"
+                row["slot_accuracy"] = f"{n_correct}/{n_comparable}"
                 row["hallucination_rate"] = f"{n_halluc}/{n_fields}"
 
                 for f in SLOT_FIELDS:
                     row[f"pred_{f}"] = str(pred.get(f) or "")
                     row[f"gold_{f}"] = str(gold.get(f) or "")
-                    row[f"slot_ok_{f}"] = "1" if slot_scores[f] else "0"
+                    score_val = slot_scores[f]
+                    row[f"slot_ok_{f}"] = "skip" if score_val is None else ("1" if score_val else "0")
                     row[f"halluc_{f}"] = "1" if halluc_scores[f] else "0"
 
-                    slot_totals[f] += 1
-                    if slot_scores[f]:
-                        slot_correct[f] += 1
-                    # hallucination은 gold=None인 필드에서만 집계
-                    if gold.get(f) is None:
+                    # device_num: gold=None이면 집계 제외
+                    if score_val is not None:
+                        slot_totals[f] += 1
+                        if score_val:
+                            slot_correct[f] += 1
+                    # hallucination은 gold=None이고 device_num이 아닌 필드에서만 집계
+                    if gold.get(f) is None and f != "device_num":
                         halluc_totals[f] += 1
                         if halluc_scores[f]:
                             halluc_count[f] += 1

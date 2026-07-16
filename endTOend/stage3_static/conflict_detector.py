@@ -326,30 +326,31 @@ def detect_conflict(new_flow: dict, existing_flows: list[dict]) -> list[dict]:
         충돌이 있는 항목만 담은 리스트:
         [{"conflicting": True, "conflict_type": str, "reason": str, "with_flow": dict}, ...]
     """
-    # new_flow 정규화 (flows 래퍼 있으면 첫 번째 flow 추출)
+    # new_flow 정규화 (flows 래퍼 있으면 모든 flows 추출 — B6 fix: SFC 다중 룰 전체 검사)
     if "flows" in new_flow:
-        flows_list = new_flow.get("flows", [])
-        f_new = flows_list[0] if flows_list else {}
+        new_flows = new_flow.get("flows", [])
     else:
-        f_new = new_flow
+        new_flows = [new_flow]
 
     conflicts = []
 
-    for existing in existing_flows:
-        # existing 정규화
-        if "flows" in existing:
-            flows_list = existing.get("flows", [])
-            f_existing = flows_list[0] if flows_list else {}
-        else:
-            f_existing = existing
+    for f_new in new_flows:
+        for existing in existing_flows:
+            # existing 정규화
+            if "flows" in existing:
+                existing_sub_flows = existing.get("flows", [])
+            else:
+                existing_sub_flows = [existing]
 
-        result = _compare_two_flows(f_new, f_existing)
-        if result["conflicting"]:
-            conflicts.append({
-                "conflicting": True,
-                "conflict_type": result["conflict_type"],
-                "reason": result["reason"],
-                "with_flow": f_existing,
-            })
+            for f_existing in existing_sub_flows:
+                result = _compare_two_flows(f_new, f_existing)
+                if result["conflicting"]:
+                    # 중복 충돌 방지 (같은 (f_new, f_existing) 쌍 재진입 없음)
+                    conflicts.append({
+                        "conflicting": True,
+                        "conflict_type": result["conflict_type"],
+                        "reason": result["reason"],
+                        "with_flow": f_existing,
+                    })
 
     return conflicts
