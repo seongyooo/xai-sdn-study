@@ -1,0 +1,12 @@
+﻿id,expected_type,detected_type,outcome
+S01,Shadowing,Shadowing,TP
+S02,Shadowing,Shadowing,TP
+R01,Redundancy,Redundancy,TP
+R02,Redundancy,Redundancy,TP
+I01,Imbrication,Imbrication,TP
+I02,Imbrication,Imbrication,TP
+C01,Correlation,Correlation,TP
+G01,Generalization,Generalization,TP
+N01,none,none,TN
+N02,none,none,TN
+N03,none,none,TN
