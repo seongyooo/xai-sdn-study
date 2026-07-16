@@ -111,6 +111,14 @@ class TwinVerifier:
             elif c["type"] == "IPV4_DST":
                 dst_ip = c.get("ip", "").split("/")[0]
 
+        # IP criteria가 없으면 테스트 대상 호스트를 특정할 수 없음 → skip
+        # (VLAN-only, port-only 등 IP 주소 없는 룰 모두 해당)
+        if src_ip is None and dst_ip is None:
+            return TwinResult(
+                status="skipped",
+                reason="FlowRule에 IPV4_SRC/IPV4_DST criteria가 없어 트래픽 검증 대상을 특정할 수 없음",
+            )
+
         # IP→호스트 매핑 (다이아몬드 토폴로지 기준)
         ip_to_host = {
             "10.0.0.1": "h1", "10.0.0.2": "h2",

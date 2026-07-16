@@ -110,6 +110,17 @@ class IntentIR(BaseModel):
             except (ValueError, TypeError):
                 return None
 
+        # IP 필드 — LLM이 non-null을 줬는데 유효한 IPv4가 아니면 오류
+        # (조용히 None으로 변환하면 catch-all 룰이 만들어질 수 있음)
+        _IP_PATTERN = re.compile(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}")
+        for _field in ("src_ip", "dst_ip"):
+            _val = raw.get(_field)
+            if _val and not _IP_PATTERN.match(str(_val).split("/")[0]):
+                raise ValueError(
+                    f"LLM이 {_field}에 유효하지 않은 값 '{_val}'을 반환했습니다. "
+                    f"IP 주소(예: 10.0.0.1)를 포함한 인텐트를 입력해주세요."
+                )
+
         return cls(
             action=action_raw,
             device_hint=device_hint,
