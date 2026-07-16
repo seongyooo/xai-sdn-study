@@ -6,6 +6,7 @@ Stage1(인텐트 파싱) → Stage2(FlowRule 컴파일)의 교환 형식.
 """
 from __future__ import annotations
 
+import re
 from typing import Literal, Optional
 
 from pydantic import BaseModel, field_validator
@@ -39,16 +40,24 @@ class IntentIR(BaseModel):
     @field_validator("src_ip", "dst_ip", mode="before")
     @classmethod
     def _normalize_ip(cls, v: Optional[str]) -> Optional[str]:
-        """IP 주소에 /32 마스크가 없으면 추가"""
+        """IP 주소에 /32 마스크가 없으면 추가. 유효한 IPv4가 아니면 None 반환."""
         if v is None:
             return v
         v = str(v).strip()
-        if v and "/" not in v:
-            # 단순 IP 주소면 /32 추가
-            parts = v.split(".")
-            if len(parts) == 4:
-                v = v + "/32"
-        return v or None
+        if not v:
+            return None
+
+        # CIDR에서 IP 부분만 추출
+        ip_part = v.split("/")[0]
+
+        # 유효한 IPv4인지 확인 (숫자 4개가 점으로 구분)
+        if not re.match(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$", ip_part):
+            return None
+
+        # /마스크가 없으면 /32 추가
+        if "/" not in v:
+            v = v + "/32"
+        return v
 
     def to_dict(self) -> dict:
         """직렬화 (None 필드 제외)"""
@@ -71,8 +80,12 @@ class IntentIR(BaseModel):
             else:
                 action_raw = "forward"
 
-        # device_hint 정규화
-        device_hint = str(raw.get("device_hint", raw.get("device", "switch 1"))).strip()
+        # device_hint 정규화 — null/"None"/빈값이면 기본값 "switch 1"
+        device_hint_raw = raw.get("device_hint") or raw.get("device")
+        if not device_hint_raw or str(device_hint_raw).strip().lower() in ("none", "null", ""):
+            device_hint = "switch 1"
+        else:
+            device_hint = str(device_hint_raw).strip()
 
         # ip_proto 정규화
         proto_raw = raw.get("ip_proto")
