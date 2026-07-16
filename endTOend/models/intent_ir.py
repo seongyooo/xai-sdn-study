@@ -115,7 +115,14 @@ class IntentIR(BaseModel):
         _IP_PATTERN = re.compile(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}")
         for _field in ("src_ip", "dst_ip"):
             _val = raw.get(_field)
-            if _val and not _IP_PATTERN.match(str(_val).split("/")[0]):
+            if _val is None:
+                continue
+            if not isinstance(_val, str):
+                raise ValueError(
+                    f"LLM이 {_field}에 문자열이 아닌 {type(_val).__name__} 값을 반환했습니다. "
+                    f"IP 주소(예: 10.0.0.1)를 포함한 인텐트를 입력해주세요."
+                )
+            if not _IP_PATTERN.match(_val.split("/")[0]):
                 raise ValueError(
                     f"LLM이 {_field}에 유효하지 않은 값 '{_val}'을 반환했습니다. "
                     f"IP 주소(예: 10.0.0.1)를 포함한 인텐트를 입력해주세요."

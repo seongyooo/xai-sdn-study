@@ -67,7 +67,10 @@ def main() -> int:
     parser.add_argument("--verbose", action="store_true", help="상세 출력")
     args = parser.parse_args()
 
-    intent: str = args.intent
+    intent: str = args.intent.strip()
+    if not intent:
+        print("오류: 인텐트가 비어 있습니다.")
+        return 1
     model: str = args.model or config.LLM_MODEL
     rag_k: int = args.rag_k
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")

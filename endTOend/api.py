@@ -42,6 +42,12 @@ class RunRequest(BaseModel):
     skip_twin: bool = False
     skip_deploy: bool = False
 
+    def validate_intent(self) -> str | None:
+        """빈 인텐트면 오류 메시지 반환, 정상이면 None"""
+        if not self.intent.strip():
+            return "인텐트가 비어 있습니다."
+        return None
+
 
 # ── SSE helper ────────────────────────────────────────────────────────────────
 
@@ -52,6 +58,12 @@ def _sse(data: dict) -> str:
 # ── Pipeline runner (synchronous, called in thread) ───────────────────────────
 
 def _run_pipeline(req: RunRequest, q: std_queue.Queue) -> None:
+    # 빈 인텐트 조기 거부
+    if err := req.validate_intent():
+        q.put(_sse({"type": "error", "stage": 0, "error": err}))
+        q.put(_sse({"type": "done"}))
+        return
+
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     result: dict = {
         "run_id": run_id,
@@ -64,6 +76,9 @@ def _run_pipeline(req: RunRequest, q: std_queue.Queue) -> None:
 
     def emit(data: dict) -> None:
         q.put(_sse(data))
+
+    def progress(n: int, msg: str) -> None:
+        emit({"type": "progress", "stage": n, "msg": msg})
 
     def start(n: int, name: str) -> float:
         emit({"type": "stage", "stage": n, "status": "running", "name": name})
@@ -93,16 +108,25 @@ def _run_pipeline(req: RunRequest, q: std_queue.Queue) -> None:
         from stage1_intent.intent_parser import IntentParser
         from stage1_intent.rag import build_index
 
+        progress(1, f"LLM 클라이언트 초기화 중... (모델: {req.model})")
         client = LLMClient(model=req.model)
+
         rag_index = rag_texts = rag_outputs = None
         if not req.no_rag and config.DATASET_PATH.exists() and req.rag_k > 0:
             try:
+                progress(1, f"RAG 인덱스 구축 중... (유사 예시 k={req.rag_k})")
                 rag_index, rag_texts, rag_outputs = build_index(
                     config.DATASET_PATH, client
                 )
-            except Exception:
-                pass
+                progress(1, f"RAG 완료 — {len(rag_texts) if rag_texts else 0}개 예시 임베딩됨")
+            except Exception as rag_exc:
+                progress(1, f"RAG 스킵 (오류: {str(rag_exc)[:60]})")
+        elif req.no_rag:
+            progress(1, "RAG 비활성화 — LLM 직접 호출")
+        else:
+            progress(1, "데이터셋 없음 — RAG 스킵")
 
+        progress(1, "인텐트 파싱 중... (LLM 호출)")
         ir = IntentParser(
             client=client,
             rag_index=rag_index,
@@ -110,6 +134,9 @@ def _run_pipeline(req: RunRequest, q: std_queue.Queue) -> None:
             rag_outputs=rag_outputs,
             k=req.rag_k,
         ).parse(req.intent)
+        progress(1, f"파싱 완료 → action={ir.action}, device={ir.device_hint}"
+                    + (f", src={ir.src_ip}" if ir.src_ip else "")
+                    + (f", dst={ir.dst_ip}" if ir.dst_ip else ""))
         result["stage1"] = ir.to_dict()
         done(1, ir.to_dict(), t)
     except Exception as exc:
@@ -122,7 +149,15 @@ def _run_pipeline(req: RunRequest, q: std_queue.Queue) -> None:
     try:
         from stage2_flowrule.compiler import compile_flowrule
 
+        progress(2, f"device_hint 변환 중... ({ir.device_hint!r} → ONOS device ID)")
+        progress(2, f"OpenFlow criteria 생성 중... (action={ir.action})")
         flowrule = compile_flowrule(ir)
+        flows = flowrule.get("flows", [])
+        f0 = flows[0] if flows else {}
+        criteria_n = len(f0.get("selector", {}).get("criteria", []))
+        priority = f0.get("priority", "?")
+        device_id = f0.get("deviceId", "?")
+        progress(2, f"컴파일 완료 → deviceId={device_id}, priority={priority}, criteria={criteria_n}개")
         result["stage2"] = flowrule
         done(2, flowrule, t)
     except Exception as exc:
@@ -135,13 +170,17 @@ def _run_pipeline(req: RunRequest, q: std_queue.Queue) -> None:
     try:
         from stage3_static.static_validator import validate as static_validate
 
+        progress(3, "ONOS 기존 플로우 조회 중...")
         existing = None
         try:
             from stage4_twin.onos_client import OnosClient
             existing = OnosClient().flows()
+            progress(3, f"기존 플로우 {len(existing) if existing else 0}개 수신")
         except Exception:
-            pass
+            progress(3, "ONOS 연결 실패 — 충돌 탐지 없이 스키마만 검증")
 
+        progress(3, "스키마 검증 중... (ONOS FlowRule 형식 확인)")
+        progress(3, "충돌 탐지 중... (Shadowing / Correlation / Imbrication)")
         static_result = static_validate(flowrule, existing_flows=existing)
         r3 = {
             "passed": static_result.passed,
@@ -150,6 +189,13 @@ def _run_pipeline(req: RunRequest, q: std_queue.Queue) -> None:
             "warnings": static_result.warnings,
             "summary": static_result.summary(),
         }
+        if static_result.warnings:
+            for w in static_result.warnings:
+                progress(3, f"⚠ 경고: {w[:100]}")
+        if static_result.conflicts:
+            for c in static_result.conflicts:
+                progress(3, f"✗ 충돌: [{c.get('conflict_type')}] {c.get('reason','')[:80]}")
+        progress(3, f"검증 결과: {'PASS' if static_result.passed else 'FAIL'}")
         result["stage3"] = r3
         done(3, r3, t)
     except Exception as exc:
@@ -160,15 +206,30 @@ def _run_pipeline(req: RunRequest, q: std_queue.Queue) -> None:
     # ── Stage 4: Digital Twin ─────────────────────────────────────────────────
     t = start(4, "Digital Twin")
     if req.skip_twin:
+        progress(4, "Skip Digital Twin 옵션 활성화 — 건너뜀")
         from stage4_twin.twin_verifier import TwinResult
         twin_result = TwinResult(status="skipped", reason="skip_twin option")
     else:
         try:
-            from stage4_twin.twin_verifier import TwinVerifier
-            twin_result = TwinVerifier().verify(flowrule)
+            from stage4_twin.twin_verifier import TwinVerifier, TwinResult
+            progress(4, "플랫폼 환경 확인 중... (Linux + root + Mininet 필요)")
+            verifier = TwinVerifier()
+            # 플랫폼 체크 결과 미리 확인
+            skip_reason = verifier._check_platform()
+            if skip_reason:
+                progress(4, f"환경 조건 미충족 — {skip_reason}")
+            else:
+                progress(4, "Mininet 토폴로지 구성 중...")
+                progress(4, "ONOS 컨트롤러 연결 중...")
+                progress(4, "FlowRule 배포 및 트래픽 검증 중...")
+            twin_result = verifier.verify(flowrule)
+            if twin_result.checks:
+                for chk, ok in twin_result.checks.items():
+                    progress(4, f"{'✓' if ok else '✗'} {chk}: {'통과' if ok else '실패'}")
         except Exception as exc:
             from stage4_twin.twin_verifier import TwinResult
             twin_result = TwinResult(status="error", reason=str(exc))
+            progress(4, f"오류 발생: {str(exc)[:100]}")
 
     r4 = {
         "status": twin_result.status,
@@ -178,7 +239,7 @@ def _run_pipeline(req: RunRequest, q: std_queue.Queue) -> None:
         "summary": twin_result.summary(),
     }
     result["stage4"] = r4
-    s4_status = "skipped" if req.skip_twin else "done"
+    s4_status = "skipped" if twin_result.status == "skipped" else "done"
     emit({"type": "stage", "stage": 4, "status": s4_status,
           "result": r4, "elapsed": round(time.time() - t, 2)})
 
@@ -187,6 +248,11 @@ def _run_pipeline(req: RunRequest, q: std_queue.Queue) -> None:
     try:
         from stage5_xai.explainer import XAIExplainer
 
+        progress(5, "각 단계 결과 종합 중...")
+        progress(5, f"정적 검증: {'PASS' if static_result.passed else 'FAIL'} | "
+                    f"Digital Twin: {twin_result.status}")
+        progress(5, "최종 판정 계산 중...")
+        progress(5, f"XAI 판정 근거 생성 중... (LLM 호출: {req.model})")
         xai = XAIExplainer(client=client).explain(
             intent=req.intent,
             ir=ir,
@@ -196,6 +262,7 @@ def _run_pipeline(req: RunRequest, q: std_queue.Queue) -> None:
         )
         r5 = xai.to_dict()
         decision = xai.decision
+        progress(5, f"최종 결정: {decision}")
         result["stage5"] = r5
         done(5, r5, t)
     except Exception as exc:
@@ -209,15 +276,26 @@ def _run_pipeline(req: RunRequest, q: std_queue.Queue) -> None:
         try:
             from stage6_deploy.deployer import Deployer
 
+            progress(6, "배포 전 ONOS 플로우 스냅샷 수집 중...")
+            progress(6, f"FlowRule POST → {config.ONOS_URL}/flows")
             dep = Deployer().deploy(flowrule)
             r6 = {"success": dep.success, "flow_ids": dep.flow_ids, "error": dep.error}
+            if dep.success:
+                progress(6, f"배포 완료 — 신규 flow ID: {dep.flow_ids}")
+            else:
+                progress(6, f"배포 실패: {dep.error}")
             done(6, r6, t)
         except Exception as exc:
             r6 = {"error": str(exc)}
             error(6, str(exc))
+    elif req.skip_deploy:
+        progress(6, "Skip ONOS Deploy 옵션 활성화 — 건너뜀")
+        r6 = {"status": "skipped", "reason": "skip_deploy option"}
+        emit({"type": "stage", "stage": 6, "status": "skipped",
+              "result": r6, "elapsed": 0})
     else:
-        reason = "skip_deploy option" if req.skip_deploy else f"decision={decision}"
-        r6 = {"status": "skipped", "reason": reason}
+        progress(6, f"decision={decision} — 배포 조건 미충족, 건너뜀")
+        r6 = {"status": "skipped", "reason": f"decision={decision}"}
         emit({"type": "stage", "stage": 6, "status": "skipped",
               "result": r6, "elapsed": 0})
     result["stage6"] = r6

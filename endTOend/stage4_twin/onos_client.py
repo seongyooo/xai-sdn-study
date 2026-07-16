@@ -168,9 +168,16 @@ class OnosClient:
     def delete_flows_by_priority(self, priority: int) -> int:
         """특정 priority의 flow 전체 삭제. 삭제한 수 반환."""
         matches = [f for f in self.flows() if f.get("priority") == priority]
+        failed = 0
         for flow in matches:
-            self.delete_flow(flow["deviceId"], flow["id"])
-        return len(matches)
+            try:
+                self.delete_flow(flow["deviceId"], flow["id"])
+            except Exception as exc:
+                failed += 1
+                print(f"    [경고] flow {flow.get('id')} 삭제 실패: {exc}")
+        if failed:
+            print(f"    [경고] rollback 중 {failed}/{len(matches)}개 flow 삭제 실패 — ONOS에 잔류 가능")
+        return len(matches) - failed
 
     def hosts(self) -> list[dict[str, Any]]:
         """등록된 호스트 목록 반환"""

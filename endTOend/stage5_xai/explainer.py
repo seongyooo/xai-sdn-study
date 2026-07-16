@@ -275,8 +275,8 @@ class XAIExplainer:
 
         try:
             result = self.client.call(system, user)
-            if result and "reason" in result:
-                return str(result["reason"])
+            if result and isinstance(result.get("reason"), str):
+                return result["reason"]
         except Exception:
             pass
         return None
