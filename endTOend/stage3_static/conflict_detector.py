@@ -207,42 +207,93 @@ def _compare_two_flows(f_new: dict, f_existing: dict) -> dict:
     new_sub_existing = _is_subset(c_new, c_existing)
     existing_sub_new = _is_subset(c_existing, c_new)
 
-    # Shadowing: 상위 priority가 하위를 완전히 포함 + action 다름
-    if p_new != p_existing and not action_equal:
-        high_c = c_new if p_new > p_existing else c_existing
-        low_c = c_existing if p_new > p_existing else c_new
-        high_p, low_p = max(p_new, p_existing), min(p_new, p_existing)
+    if not action_equal:
+        # ── Priority 해소 판단 ─────────────────────────────────
+        # OpenFlow에서 priority가 높은 룰이 항상 이긴다.
+        # 새 룰이 기존 룰보다 우선순위가 높으면 겹치는 패킷은 새 룰이 처리 → 의도된 동작.
+        # 이 경우 Correlation/Imbrication은 false positive이므로 보고하지 않는다.
+        # 단, 새 룰이 기존 룰의 match를 완전히 포함하여 기존 룰이 영원히 도달 불가한
+        # Shadowing은 운영자에게 알려야 하는 진짜 충돌이다.
 
-        if _is_subset(low_c, high_c):
+        if p_new > p_existing:
+            # 새 룰이 우선 → 기존 룰 일부/전체가 가려지는지 확인
+            if _is_subset(c_existing, c_new):
+                # 기존 룰의 match가 새 룰에 완전히 포함 → 기존 룰 도달 불가 (Shadowing)
+                return {
+                    "conflicting": True,
+                    "conflict_type": "Shadowing",
+                    "reason": (
+                        f"새 규칙(priority {p_new})이 기존 규칙(priority {p_existing})의 "
+                        f"match를 완전히 포함하여 기존 규칙이 도달 불가"
+                    ),
+                }
+            # 부분 겹침이지만 새 룰이 우선 → 정상 override, 충돌 아님
             return {
-                "conflicting": True,
-                "conflict_type": "Shadowing",
+                "conflicting": False,
+                "conflict_type": None,
                 "reason": (
-                    f"priority {high_p}이 priority {low_p}의 match를 완전히 포함하여 "
-                    f"하위 규칙이 도달 불가"
+                    f"새 규칙(priority {p_new})이 기존 규칙(priority {p_existing})보다 "
+                    f"우선순위가 높아 정상 override (충돌 아님)"
                 ),
             }
 
-    if not action_equal and (new_sub_existing or existing_sub_new):
-        return {
-            "conflicting": True,
-            "conflict_type": "Imbrication",
-            "reason": "한 규칙이 다른 규칙의 match 부분집합 (더 구체적인 규칙이 일반 규칙과 겹침)",
-        }
+        elif p_new < p_existing:
+            # 기존 룰이 우선 → 새 룰이 의도한 패킷을 기존 룰이 가로챌 수 있음
+            if _is_subset(c_new, c_existing):
+                # 새 룰의 match 전체가 기존 고우선순위 룰에 덮임 → 새 룰 도달 불가
+                return {
+                    "conflicting": True,
+                    "conflict_type": "Shadowing",
+                    "reason": (
+                        f"기존 규칙(priority {p_existing})이 새 규칙(priority {p_new})의 "
+                        f"match를 완전히 포함하여 새 규칙이 도달 불가"
+                    ),
+                }
+            # 부분 겹침 + 기존 룰 우선 → 겹치는 패킷에서 새 룰이 무시될 수 있음
+            if new_sub_existing or existing_sub_new:
+                return {
+                    "conflicting": True,
+                    "conflict_type": "Imbrication",
+                    "reason": (
+                        f"기존 규칙(priority {p_existing})이 새 규칙(priority {p_new})보다 "
+                        f"우선순위가 높고 match가 겹침 — 겹치는 패킷에서 새 규칙이 무시될 수 있음"
+                    ),
+                }
+            return {
+                "conflicting": True,
+                "conflict_type": "Correlation",
+                "reason": (
+                    f"기존 규칙(priority {p_existing})이 새 규칙(priority {p_new})보다 "
+                    f"우선순위가 높고 match가 겹치며 action이 다름"
+                ),
+            }
 
+        else:
+            # 동일 priority + 겹치는 match + 다른 action → 진짜 충돌
+            if new_sub_existing or existing_sub_new:
+                return {
+                    "conflicting": True,
+                    "conflict_type": "Imbrication",
+                    "reason": (
+                        f"동일 priority({p_new})에서 match가 부분 포함 관계이며 action이 다름 "
+                        f"— 패킷 처리 결과 비결정적"
+                    ),
+                }
+            return {
+                "conflicting": True,
+                "conflict_type": "Correlation",
+                "reason": (
+                    f"동일 priority({p_new})에서 match가 겹치고 action이 다름 "
+                    f"— 패킷 처리 결과 비결정적"
+                ),
+            }
+
+    # action 동일
     if action_equal and (new_sub_existing or existing_sub_new):
         return {
             "conflicting": True,
             "conflict_type": "Generalization",
             "reason": "한 규칙이 다른 규칙의 일반화 버전 (더 넓은 match, 같은 action)",
-        }
-
-    # Correlation: match 겹침 + action 다름
-    if not action_equal:
-        return {
-            "conflicting": True,
-            "conflict_type": "Correlation",
-            "reason": f"match가 겹치지만 서로 다른 action 수행 (priority {p_new} vs {p_existing})",
         }
 
     # match 겹침 + action 동일 + match 다름 → 잠재적 Redundancy
