@@ -1,0 +1,164 @@
+{
+  "run_id": "20260715T060438Z",
+  "intent": "block all traffic from 10.0.0.1 to 10.0.0.4 on switch 1",
+  "model": "gemini-3.1-flash-lite",
+  "rag_k": 3,
+  "timestamp": "20260715T060438Z",
+  "stage1": {
+    "action": "block",
+    "device_hint": "1",
+    "src_ip": "10.0.0.1/32",
+    "dst_ip": "10.0.0.4/32",
+    "eth_type": "ipv4"
+  },
+  "stage2": {
+    "flows": [
+      {
+        "priority": 50000,
+        "timeout": 0,
+        "isPermanent": "true",
+        "deviceId": "of:0000000000000001",
+        "selector": {
+          "criteria": [
+            {
+              "type": "ETH_TYPE",
+              "ethType": "0x800"
+            },
+            {
+              "type": "IPV4_SRC",
+              "ip": "10.0.0.1/32"
+            },
+            {
+              "type": "IPV4_DST",
+              "ip": "10.0.0.4/32"
+            }
+          ]
+        },
+        "treatment": {
+          "instructions": [
+            {
+              "type": "NOACTION"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "stage3": {
+    "passed": true,
+    "schema_errors": [],
+    "conflicts": [],
+    "warnings": [],
+    "summary": "Schema OK | 충돌 없음 → PASS"
+  },
+  "stage4": {
+    "status": "passed",
+    "reason": "모든 검사 통과",
+    "checks": {
+      "baseline_connectivity": true,
+      "intent_check": true,
+      "regression": true
+    },
+    "evidence": {
+      "baseline_msg": "h1→10.0.0.4 ping 성공 (예상: 도달 가능)",
+      "intent_msg": "h1→10.0.0.4 ping 차단됨 (예상: 차단)",
+      "regression_msg": "h2→10.0.0.3 ping 성공 (예상: 도달 가능)"
+    },
+    "summary": "PASS: 모든 검사 통과"
+  },
+  "stage5": {
+    "intent": "block all traffic from 10.0.0.1 to 10.0.0.4 on switch 1",
+    "ir_summary": "action=block(차단) | device=1 | src=10.0.0.1/32 | dst=10.0.0.4/32",
+    "flowrule_summary": "deviceId=of:0000000000000001 | priority=50000 | criteria=3개 | action=FORWARD/QoS",
+    "static_summary": "Schema OK | 충돌 없음 → PASS",
+    "twin_summary": "검증 통과 (모든 검사 통과)",
+    "decision": "APPROVE",
+    "decision_reason": "해당 FlowRule은 스키마 오류나 기존 정책과의 충돌이 없어 정적 검증을 성공적으로 통과하였습니다. 또한 디지털 트윈 시뮬레이션에서 연결성 및 인텐트 준수 여부 등 모든 검사 항목을 충족하여 최종적으로 배포가 승인되었습니다.",
+    "evidence": [
+      {
+        "stage": "Stage1_IntentParsing",
+        "finding": "action=block, device=1",
+        "data": {
+          "action": "block",
+          "device_hint": "1",
+          "src_ip": "10.0.0.1/32",
+          "dst_ip": "10.0.0.4/32",
+          "eth_type": "ipv4"
+        }
+      },
+      {
+        "stage": "Stage2_FlowRuleCompile",
+        "finding": "deviceId=of:0000000000000001, priority=50000",
+        "data": {
+          "flows": [
+            {
+              "priority": 50000,
+              "timeout": 0,
+              "isPermanent": "true",
+              "deviceId": "of:0000000000000001",
+              "selector": {
+                "criteria": [
+                  {
+                    "type": "ETH_TYPE",
+                    "ethType": "0x800"
+                  },
+                  {
+                    "type": "IPV4_SRC",
+                    "ip": "10.0.0.1/32"
+                  },
+                  {
+                    "type": "IPV4_DST",
+                    "ip": "10.0.0.4/32"
+                  }
+                ]
+              },
+              "treatment": {
+                "instructions": [
+                  {
+                    "type": "NOACTION"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      {
+        "stage": "Stage3_StaticValidation",
+        "finding": "Schema OK | 충돌 없음 → PASS",
+        "data": {
+          "passed": true,
+          "schema_errors": [],
+          "conflicts": [],
+          "warnings": []
+        }
+      },
+      {
+        "stage": "Stage4_DigitalTwin",
+        "finding": "PASS: 모든 검사 통과",
+        "data": {
+          "status": "passed",
+          "reason": "모든 검사 통과",
+          "checks": {
+            "baseline_connectivity": true,
+            "intent_check": true,
+            "regression": true
+          },
+          "evidence": {
+            "baseline_msg": "h1→10.0.0.4 ping 성공 (예상: 도달 가능)",
+            "intent_msg": "h1→10.0.0.4 ping 차단됨 (예상: 차단)",
+            "regression_msg": "h2→10.0.0.3 ping 성공 (예상: 도달 가능)"
+          }
+        }
+      }
+    ]
+  },
+  "stage6": {
+    "success": true,
+    "flow_ids": [
+      "50665499140815819"
+    ],
+    "error": ""
+  },
+  "decision": "APPROVE"
+}

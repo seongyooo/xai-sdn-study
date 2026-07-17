@@ -1,0 +1,7 @@
+﻿id,expected_decision,actual_decision,E1_ir_has_action,E2_fr_has_device_priority,E3_static_summary_match,E4_twin_summary_reflects_status,E5_decision_correct,E6_evidence_all_stages,faithfulness_score
+X01,APPROVE,APPROVE,1,1,1,1,1,1,6/6
+X02,APPROVE,APPROVE,1,1,1,1,1,1,6/6
+X03,REJECT,REJECT,1,1,1,1,1,1,6/6
+X04,REJECT,REJECT,1,1,1,1,1,1,6/6
+X05,APPROVE_WITHOUT_TWIN,APPROVE_WITHOUT_TWIN,1,1,1,1,1,1,6/6
+X06,APPROVE_WITHOUT_TWIN,APPROVE_WITHOUT_TWIN,1,1,1,1,1,1,6/6
