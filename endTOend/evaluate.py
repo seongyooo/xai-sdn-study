@@ -256,6 +256,8 @@ def evaluate(
     parse_ok = 0
     parse_fail = 0
     rejection_count = 0
+    rejection_correct = 0   # expected=rejected AND predicted=rejected
+    rejection_false_neg = 0 # expected=rejected AND predicted=accepted (missed)
     skipped_compound = 0
 
     for i, entry in enumerate(entries):
@@ -283,12 +285,36 @@ def evaluate(
         row["hallucination_rate"] = ""
         row["error"] = ""
 
-        # rejection 케이스: 별도 집계 (파이프라인 평가 대상 아님)
+        # rejection 케이스: LLM이 올바르게 거부하는지 평가
         if expected_status != "accepted":
             rejection_count += 1
-            row["parse_status"] = "rejection_skip"
+            if skip_llm or parser_obj is None:
+                row["parse_status"] = "rejection_skip"
+                rows.append(row)
+                print(f"[{eid}] SKIP (rejection, --skip-llm) — {instruction[:60]}")
+                continue
+            try:
+                t0 = time.monotonic()
+                pred_rej = parser_obj.parse(instruction)
+                elapsed = time.monotonic() - t0
+                if pred_rej.status == "rejected":
+                    rejection_correct += 1
+                    row["parse_status"] = (
+                        f"rejection_ok:{pred_rej.rejection_reason} ({elapsed:.1f}s)"
+                    )
+                    print(
+                        f"[{eid}] REJECT-OK [{pred_rej.rejection_reason}] — {instruction[:50]}"
+                    )
+                else:
+                    rejection_false_neg += 1
+                    row["parse_status"] = f"rejection_miss ({elapsed:.1f}s)"
+                    row["error"] = "expected rejection but got accepted"
+                    print(f"[{eid}] REJECT-MISS (should reject) — {instruction[:50]}")
+            except Exception as exc:
+                row["parse_status"] = f"rejection_error: {exc}"
+                row["error"] = str(exc)
+                print(f"[{eid}] REJECT-ERROR — {exc}")
             rows.append(row)
-            print(f"[{eid}] SKIP (rejection) — {instruction[:60]}")
             continue
 
         # compound 케이스(category="compound"): 다중 독립 인텐트 → 미지원
@@ -393,8 +419,14 @@ def evaluate(
 
     total_eval = accepted_count - skipped_compound
     print(f"전체: {len(entries)}개 | 평가 대상(accepted): {total_eval}개")
-    print(f"  rejection 스킵: {rejection_count}개")
-    print(f"  compound 스킵:  {skipped_compound}개")
+    print(f"  rejection 케이스: {rejection_count}개")
+    print(f"  compound 스킵:    {skipped_compound}개")
+
+    if not skip_llm and rejection_count > 0:
+        recall = 100 * rejection_correct / rejection_count if rejection_count > 0 else 0
+        print(f"\n[거부 탐지 (Rejection Recall)]")
+        print(f"  정확 거부: {rejection_correct}/{rejection_count}  ({recall:.1f}%)")
+        print(f"  미탐지:    {rejection_false_neg}/{rejection_count}")
 
     if not skip_llm and total_eval > 0:
         print(f"\n[Stage 1 LLM 파싱]")

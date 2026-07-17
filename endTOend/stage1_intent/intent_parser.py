@@ -17,7 +17,8 @@ if TYPE_CHECKING:
     from models.topology import NetworkTopology
 
 SYSTEM_PROMPT = """You are an SDN network intent parser.
-Extract the user's network intent into a structured JSON with these fields:
+
+For a VALID intent, output this JSON:
 {
   "action": "forward" | "block" | "qos" | "sfc" | "reroute",
   "device_hint": "<switch name or number as mentioned>",
@@ -38,7 +39,20 @@ Extract the user's network intent into a structured JSON with these fields:
   "eth_type": "ipv4" | "ipv6" | "arp" | null
 }
 
-Action rules:
+For an INVALID intent, output this JSON instead:
+{"status": "rejected", "rejection_reason": "<reason>", "rejection_detail": "<brief explanation>"}
+
+Rejection reasons:
+- "ambiguous"     : too vague to map to a concrete network action
+  e.g. "make network better", "optimize traffic", "prioritize h1 traffic" (no specific action/target)
+- "contradictory" : mutually exclusive requirements in the same intent
+  e.g. "allow AND block h1 to h2", "deny and permit the same flow"
+- "unsupported"   : requires functionality beyond forward/block/qos/sfc/reroute
+  e.g. reboot switch, upgrade controller, configure MPLS, multicast routing
+- "unknown_entity": references a host, IP, or switch that does not exist in the topology
+  e.g. "h9", "database-server", "10.0.0.99", "switch 99"
+
+Action rules (for valid intents):
 - action=block   : dropping/blocking/denying traffic
 - action=forward : routing/forwarding/sending to a destination
 - action=qos     : quality of service, queue assignment, prioritization
@@ -52,7 +66,7 @@ Action rules:
                    egress port. via_device = intermediate switch to route through.
                    avoid_device = switch to bypass.
 
-Field rules:
+Field rules (for valid intents):
 - If IP is mentioned without mask, append /32
 - src_ip/dst_ip must be numeric IPv4 (x.x.x.x), never a hostname
 - For sfc: set out_port to the waypoint port number mentioned (e.g. "port 9" → 9)
@@ -103,9 +117,22 @@ class IntentParser:
                 f"LLM이 응답을 반환하지 않았습니다. 인텐트: {intent[:80]}"
             )
 
+        # ── LLM 자체 거부 감지 (B-1) ─────────────────────────────
+        # LLM이 {"status": "rejected", "rejection_reason": "..."} 형식으로 반환한 경우
+        if raw.get("status") == "rejected":
+            reason_raw = str(raw.get("rejection_reason", "")).strip().lower()
+            valid_reasons = {"ambiguous", "contradictory", "unsupported", "unknown_entity"}
+            reason = reason_raw if reason_raw in valid_reasons else "ambiguous"
+            detail = str(raw.get("rejection_detail", "")).strip()
+            return IntentPrediction(
+                status="rejected",
+                rejection_reason=reason,
+                rejection_detail=detail or f"LLM rejected: {reason}",
+            )
+
         ir = IntentIR.from_llm_output(raw)
 
-        # ── 토폴로지 그라운딩 검증 ────────────────────────────────
+        # ── 토폴로지 그라운딩 검증 (B-2) ─────────────────────────
         if self.topology is not None:
             violation = self.topology.check_intent(
                 src_ip=ir.src_ip,
