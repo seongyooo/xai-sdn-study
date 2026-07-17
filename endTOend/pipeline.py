@@ -107,14 +107,25 @@ def main() -> int:
         elif args.no_rag:
             print("  RAG 스킵 (--no-rag 플래그)")
 
+        # 토폴로지 그라운딩 — ONOS 연결 가능 시 실시간 조회, 실패 시 정적 다이아몬드
+        from models.topology import NetworkTopology
+        try:
+            from stage4_twin.onos_client import OnosClient
+            topology = NetworkTopology.from_onos(OnosClient())
+            print("  토폴로지: ONOS 실시간 조회")
+        except Exception:
+            topology = NetworkTopology.diamond()
+            print("  토폴로지: 정적 다이아몬드 (ONOS 연결 없음)")
+
         parser_obj = IntentParser(
             client=client,
             rag_index=rag_index,
             rag_texts=rag_texts,
             rag_outputs=rag_outputs,
             k=rag_k,
+            topology=topology,
         )
-        ir = parser_obj.parse(intent)
+        prediction = parser_obj.parse(intent)
 
     except Exception as exc:
         print(f"  오류: {exc}")
@@ -122,6 +133,23 @@ def main() -> int:
         _save_log(run_id, pipeline_result)
         print(f"\n파이프라인 오류로 중단. 결과: logs/{run_id}.json")
         return 1
+
+    # ── 인텐트 거부 처리 ─────────────────────────────────────────
+    if prediction.status == "rejected":
+        reason = prediction.rejection_reason or "unknown"
+        detail = prediction.rejection_detail or ""
+        print(f"  거부: [{reason}] {detail}")
+        pipeline_result["stage1"] = {
+            "status": "rejected",
+            "rejection_reason": reason,
+            "rejection_detail": detail,
+        }
+        pipeline_result["decision"] = "REJECT"
+        log_path = _save_log(run_id, pipeline_result)
+        _print_footer("REJECT", log_path)
+        return 2
+
+    ir = prediction.program
 
     stage1_content = (
         f"action={ir.action} | src={ir.src_ip or '-'} | dst={ir.dst_ip or '-'} "

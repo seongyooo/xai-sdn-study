@@ -228,12 +228,18 @@ def evaluate(
                 rag_index, rag_texts, rag_outputs = build_index(config.DATASET_PATH, client)
             except Exception as e:
                 print(f"  RAG 스킵: {e}")
+
+        # 토폴로지 그라운딩 — 정적 다이아몬드 사용
+        from models.topology import NetworkTopology
+        topology = NetworkTopology.diamond()
+
         parser_obj = IntentParser(
             client=client,
             rag_index=rag_index,
             rag_texts=rag_texts,
             rag_outputs=rag_outputs,
             k=rag_k,
+            topology=topology,
         )
 
     from stage2_flowrule.compiler import compile_flowrule, CompileError
@@ -305,8 +311,24 @@ def evaluate(
         else:
             try:
                 t0 = time.monotonic()
-                ir = parser_obj.parse(instruction)
+                prediction = parser_obj.parse(instruction)
                 elapsed = time.monotonic() - t0
+
+                # 토폴로지 그라운딩에 의해 거부된 경우
+                if prediction.status == "rejected":
+                    parse_fail += 1
+                    detail = prediction.rejection_detail or ""
+                    row["parse_status"] = (
+                        f"rejected:{prediction.rejection_reason} ({elapsed:.1f}s)"
+                    )
+                    row["error"] = f"[{prediction.rejection_reason}] {detail}"
+                    print(
+                        f"[{eid}] REJECTED [{prediction.rejection_reason}] — {detail[:60]}"
+                    )
+                    rows.append(row)
+                    continue
+
+                ir = prediction.program
                 parse_ok += 1
                 row["parse_status"] = f"ok ({elapsed:.1f}s)"
 

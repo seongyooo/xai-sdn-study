@@ -12,6 +12,28 @@ from typing import Literal, Optional
 from pydantic import BaseModel, field_validator
 
 
+class IntentPrediction(BaseModel):
+    """
+    LLM 파싱 + 토폴로지 검증 결과 래퍼.
+
+    status="accepted" 이면 program 에 IntentIR 이 담긴다.
+    status="rejected" 이면 rejection_reason + rejection_detail 에 이유가 담긴다.
+
+    rejection_reason 값:
+      ambiguous     — 인텐트가 너무 모호해 특정 액션으로 매핑 불가
+      unknown_entity — 토폴로지에 없는 호스트/스위치 참조
+      contradictory  — 서로 모순되는 요구 (allow + block 동시)
+      unsupported    — 미지원 기능 (MPLS, multicast routing 등)
+    """
+
+    status: Literal["accepted", "rejected"]
+    program: Optional["IntentIR"] = None
+    rejection_reason: Optional[
+        Literal["ambiguous", "unknown_entity", "contradictory", "unsupported"]
+    ] = None
+    rejection_detail: Optional[str] = None
+
+
 class IntentIR(BaseModel):
     """SDN 인텐트의 구조화된 중간 표현"""
 
