@@ -126,14 +126,31 @@ def _run_pipeline(req: RunRequest, q: std_queue.Queue) -> None:
         else:
             progress(1, "데이터셋 없음 — RAG 스킵")
 
+        from models.topology import NetworkTopology
+        topology = NetworkTopology.diamond()
+
         progress(1, "인텐트 파싱 중... (LLM 호출)")
-        ir = IntentParser(
+        prediction = IntentParser(
             client=client,
             rag_index=rag_index,
             rag_texts=rag_texts,
             rag_outputs=rag_outputs,
             k=req.rag_k,
+            topology=topology,
         ).parse(req.intent)
+
+        # 토폴로지 그라운딩 거부 처리
+        if prediction.status == "rejected":
+            reason = prediction.rejection_reason or "unknown"
+            detail = prediction.rejection_detail or ""
+            progress(1, f"인텐트 거부 [{reason}]: {detail}")
+            result["stage1"] = {"status": "rejected", "rejection_reason": reason,
+                                "rejection_detail": detail}
+            error(1, f"[{reason}] {detail}")
+            finish("REJECT")
+            return
+
+        ir = prediction.program
         progress(1, f"파싱 완료 → action={ir.action}, device={ir.device_hint}"
                     + (f", src={ir.src_ip}" if ir.src_ip else "")
                     + (f", dst={ir.dst_ip}" if ir.dst_ip else ""))

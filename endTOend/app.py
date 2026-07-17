@@ -373,15 +373,33 @@ if run_btn and intent.strip():
                         config.DATASET_PATH, client
                     )
 
+                from models.topology import NetworkTopology
+                topology = NetworkTopology.diamond()
+
                 parser_obj = IntentParser(
                     client=client,
                     rag_index=rag_index,
                     rag_texts=rag_texts,
                     rag_outputs=rag_outputs,
                     k=rag_k,
+                    topology=topology,
                 )
-                ir = parser_obj.parse(intent)
+                prediction = parser_obj.parse(intent)
 
+            # 토폴로지 그라운딩 거부 처리
+            if prediction.status == "rejected":
+                reason = prediction.rejection_reason or "unknown"
+                detail = prediction.rejection_detail or ""
+                pipeline_result["stage1"] = {
+                    "status": "rejected",
+                    "rejection_reason": reason,
+                    "rejection_detail": detail,
+                }
+                st.error(f"인텐트 거부 [{reason}]: {detail}")
+                s1.update(label="**Stage 1** — 인텐트 해석 ❌ (거부)", state="error")
+                st.stop()
+
+            ir = prediction.program
             pipeline_result["stage1"] = ir.to_dict()
             st.success(
                 f"action=**{ir.action}** | "
