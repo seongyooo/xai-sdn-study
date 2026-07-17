@@ -39,7 +39,8 @@ endTOend/
 ├── pipeline.py              # 메인 CLI 진입점
 ├── config.py                # 전역 설정 (.env 로드)
 ├── models/
-│   └── intent_ir.py         # IntentIR 데이터 모델 (Pydantic)
+│   ├── intent_ir.py         # IntentIR + IntentPrediction 데이터 모델 (Pydantic)
+│   └── topology.py          # 네트워크 토폴로지 정의 + 엔티티 검증 (B-2)
 ├── stage1_intent/
 │   ├── llm_client.py        # LLM 백엔드 추상화 (Ollama / Gemini)
 │   ├── rag.py               # FAISS 기반 RAG
@@ -118,6 +119,115 @@ Intent2Flow-ONOS.csv의 예시 50개를 임베딩해 FAISS IndexFlatL2에 저장
 
 시스템 프롬프트 + RAG 예시 → LLM 호출 → `IntentIR.from_llm_output()` 순서로 처리한다.
 `--no-rag` 플래그로 RAG 없이 LLM 직접 호출도 가능하다.
+
+`topology` 파라미터가 제공되면 **토폴로지 그라운딩**이 활성화된다 (아래 절 참조).
+`parse()` 의 반환형이 `IntentIR` 에서 `IntentPrediction` 으로 변경되었다.
+
+---
+
+### 토폴로지 그라운딩 — B-2 구현 (`models/topology.py`)
+
+**목적:** LLM이 토폴로지에 없는 호스트(`h9`, `10.0.0.9`)나 스위치(`switch 7`)를
+생성하는 **환각(hallucination)**을 억제하고 탐지한다.
+
+로드맵 항목 B-2에 해당하며, 논문의 "인가된 인벤토리 기반 환각 억제" 기여를 구성한다.
+
+#### 구현 방법
+
+두 단계로 동작한다.
+
+**1단계 — 프롬프트 주입 (사전 억제)**
+
+`NetworkTopology.to_prompt_text()` 가 생성하는 토폴로지 컨텍스트를 LLM 시스템 프롬프트
+앞부분에 삽입한다. LLM이 응답을 생성하기 전에 허용된 엔티티 목록을 명시적으로 제시한다.
+
+```
+Network topology (ONLY reference entities listed here - do not invent others):
+  Hosts: h1=10.0.0.1, h2=10.0.0.2, h3=10.0.0.3, h4=10.0.0.4
+  Switches:
+    s1 (ports: 1,2,3,4,9)
+    s2 (ports: 1,2)
+    s3 (ports: 1,2)
+    s4 (ports: 1,2,3,4)
+  Special: s1 port 9 = firewall/IDS service point (SFC waypoint)
+```
+
+**2단계 — 후처리 검증 (사후 탐지)**
+
+LLM이 IR을 반환한 후, Python 코드가 토폴로지 인벤토리와 대조한다.
+LLM에 자기 오류 판단을 맡기지 않고 결정론적으로 검증한다.
+
+```python
+def check_intent(src_ip, dst_ip, device_hint) -> Optional[tuple[str, str]]:
+    if not validate_ip(src_ip):
+        return ("unknown_entity", f"src_ip '{ip}' not in topology")
+    if not validate_ip(dst_ip):
+        return ("unknown_entity", f"dst_ip '{ip}' not in topology")
+    if not validate_switch(device_hint):
+        return ("unknown_entity", f"device '{hint}' not in topology")
+    return None  # 검증 통과
+```
+
+검증 실패 시 `IntentPrediction(status="rejected", rejection_reason="unknown_entity")` 반환.
+
+#### NetworkTopology 클래스
+
+| 메서드 | 설명 |
+|--------|------|
+| `diamond()` | 정적 다이아몬드 토폴로지 반환 (항상 사용 가능) |
+| `from_onos(client)` | ONOS REST API 실시간 조회; 연결 실패 시 diamond() 폴백 |
+| `validate_ip(ip)` | CIDR 포함 IP가 알려진 호스트 IP인지 확인 |
+| `validate_switch(hint)` | "switch 4", "s2", ONOS device_id 등 다양한 형식 지원 |
+| `check_intent(src, dst, device)` | 세 필드를 한 번에 검증, 위반 시 `(reason, detail)` 반환 |
+| `to_prompt_text()` | LLM 프롬프트에 삽입할 토폴로지 텍스트 생성 |
+
+#### IntentPrediction (`models/intent_ir.py`)
+
+`parse()` 의 반환형으로, 파싱 성공/실패를 명시적으로 표현한다.
+
+```python
+class IntentPrediction(BaseModel):
+    status: Literal["accepted", "rejected"]
+    program: Optional[IntentIR] = None          # accepted 시 IntentIR 포함
+    rejection_reason: Optional[Literal[         # rejected 시 사유
+        "ambiguous",       # 너무 모호해 특정 액션으로 매핑 불가
+        "unknown_entity",  # 토폴로지에 없는 호스트/스위치 참조
+        "contradictory",   # 서로 모순되는 요구 (allow + block 동시)
+        "unsupported",     # 미지원 기능 (MPLS, multicast 등)
+    ]] = None
+    rejection_detail: Optional[str] = None      # 상세 설명
+```
+
+현재 파이프라인이 탐지하는 사유는 `unknown_entity` 이며, 나머지는 B-1(Rejection 처리)에서 추가 예정이다.
+
+#### 파이프라인 동작 변경
+
+**pipeline.py**
+
+ONOS 연결이 가능하면 `NetworkTopology.from_onos()` 로 실시간 토폴로지를 조회하고,
+연결 불가 시 `NetworkTopology.diamond()` 로 폴백한다.
+`parse()` 가 `rejected` 를 반환하면 Stage 2~6을 건너뛰고 즉시 REJECT 로 종료한다.
+
+```
+Stage 1 LLM 파싱
+  ├─ accepted → Stage 2 진행
+  └─ rejected → [reason] detail 출력 후 REJECT 종료 (exit 2)
+```
+
+**evaluate.py**
+
+`parser_obj.parse()` 가 `IntentPrediction` 을 반환하도록 변경되었다.
+accepted 케이스에서 `rejected` 가 반환되면 `parse_fail` 로 집계하고 사유를 로그에 기록한다.
+
+#### 설계 결정: LLM이 아닌 Python으로 검증하는 이유
+
+| 방식 | 장점 | 단점 |
+|------|------|------|
+| LLM 자기 판단 | 프롬프트만으로 구현 | LLM마다 반응 다름, 재현성 없음, 포맷 변경 필요 |
+| Python 후처리 (선택) | 결정론적, 100% 재현, 모델 무관 | 프롬프트 주입과 병행해야 최대 효과 |
+
+두 단계를 조합하여 LLM은 "생성 전 참고" 용으로 토폴로지를 사용하고,
+Python은 "생성 후 검증" 역할을 확실히 담당한다.
 
 ---
 
