@@ -401,12 +401,34 @@ if run_btn and intent.strip():
 
             ir = prediction.program
             pipeline_result["stage1"] = ir.to_dict()
-            st.success(
-                f"action=**{ir.action}** | "
-                f"src={ir.src_ip or '-'} | dst={ir.dst_ip or '-'} | "
-                f"device={ir.device_hint}"
-            )
-            with st.expander("IntentIR 상세"):
+
+            # ── 사용자 친화적 요약 ─────────────────────────────────
+            _action_ko = {
+                "block": "🚫 차단 (Block)",
+                "forward": "✅ 전달 (Forward)",
+                "qos": "⚡ QoS 처리",
+                "sfc": "🔗 서비스 체인 (SFC)",
+                "reroute": "🔀 경로 변경 (Reroute)",
+            }
+            col_a, col_b = st.columns(2)
+            with col_a:
+                st.markdown(f"**동작:** {_action_ko.get(ir.action, ir.action)}")
+                st.markdown(f"**스위치:** {ir.device_hint}")
+            with col_b:
+                traffic_parts = []
+                if ir.src_ip:    traffic_parts.append(f"출발지: `{ir.src_ip}`")
+                if ir.dst_ip:    traffic_parts.append(f"목적지: `{ir.dst_ip}`")
+                if ir.ip_proto:  traffic_parts.append(f"프로토콜: {ir.ip_proto.upper()}")
+                if ir.dst_port:  traffic_parts.append(f"포트: {ir.dst_port}")
+                if ir.in_port:   traffic_parts.append(f"입력 포트: {ir.in_port}")
+                st.markdown("**트래픽 조건:**")
+                if traffic_parts:
+                    for tp in traffic_parts:
+                        st.markdown(f"  - {tp}")
+                else:
+                    st.markdown("  - 전체 트래픽")
+
+            with st.expander("세부사항 (IntentIR JSON)"):
                 st.json(ir.to_dict())
             s1.update(label="**Stage 1** — 인텐트 해석 ✅", state="complete")
 
@@ -425,17 +447,37 @@ if run_btn and intent.strip():
 
             flows = flowrule.get("flows", [])
             flow = flows[0] if flows else {}
-            criteria_n = len(flow.get("selector", {}).get("criteria", []))
+            criteria = flow.get("selector", {}).get("criteria", [])
             instructions = flow.get("treatment", {}).get("instructions", [])
             has_output = any(i.get("type") == "OUTPUT" for i in instructions)
-            action_label = "FORWARD" if has_output else "DROP(차단)"
+            action_label = "🟢 전달 (FORWARD)" if has_output else "🔴 차단 (DROP)"
 
-            st.success(
-                f"deviceId=`{flow.get('deviceId')}` | "
-                f"priority={flow.get('priority')} | "
-                f"criteria={criteria_n}개 | {action_label}"
-            )
-            with st.expander("FlowRule JSON"):
+            dev_id = flow.get("deviceId", "-")
+            sw_label = _dev_label(dev_id) if dev_id != "-" else "-"
+
+            col_a, col_b = st.columns(2)
+            with col_a:
+                st.markdown(f"**스위치:** {sw_label}  (`{dev_id}`)")
+                st.markdown(f"**우선순위:** {flow.get('priority', '-')}")
+                st.markdown(f"**동작:** {action_label}")
+            with col_b:
+                st.markdown("**매칭 조건:**")
+                _type_ko = {
+                    "ETH_TYPE": "이더넷 타입", "IPV4_SRC": "출발지 IP",
+                    "IPV4_DST": "목적지 IP", "IP_PROTO": "IP 프로토콜",
+                    "TCP_DST": "TCP 목적지 포트", "TCP_SRC": "TCP 출발지 포트",
+                    "UDP_DST": "UDP 목적지 포트", "IN_PORT": "입력 포트",
+                    "VLAN_VID": "VLAN ID",
+                }
+                for c in criteria:
+                    t = c.get("type", "")
+                    name = _type_ko.get(t, t)
+                    val = c.get("ip") or c.get("ethType") or c.get("protocol") or c.get("tcpPort") or c.get("port") or "-"
+                    st.markdown(f"  - {name}: `{val}`")
+                if not criteria:
+                    st.markdown("  - 전체 트래픽 (조건 없음)")
+
+            with st.expander("세부사항 (FlowRule JSON)"):
                 st.json(flowrule)
             s2.update(label="**Stage 2** — FlowRule 컴파일 ✅", state="complete")
 
@@ -471,14 +513,37 @@ if run_btn and intent.strip():
                 "summary": summary,
             }
 
-            if static_result.passed:
-                st.success(summary)
-            else:
-                st.warning(summary)
+            _conflict_ko = {
+                "shadowed":   "🔲 규칙 가림 (Shadowed) — 높은 우선순위 규칙이 이 규칙을 덮어씁니다.",
+                "redundant":  "♻️ 중복 규칙 (Redundant) — 동일한 효과를 내는 규칙이 이미 존재합니다.",
+                "conflict":   "⚡ 규칙 충돌 (Conflict) — 동일 트래픽에 서로 다른 동작이 지정되어 있습니다.",
+                "loop":       "🔄 포워딩 루프 (Loop) — 패킷이 무한 순환할 수 있는 경로가 감지됩니다.",
+            }
+
+            col_a, col_b = st.columns(2)
+            with col_a:
+                if static_result.passed:
+                    st.success("검증 통과 ✅")
+                else:
+                    st.warning("검증 경고 ⚠️")
+                st.markdown(f"**스키마 오류:** {len(static_result.schema_errors)}건")
+                st.markdown(f"**충돌 탐지:** {len(static_result.conflicts)}건")
+                st.markdown(f"**경고:** {len(static_result.warnings)}건")
+            with col_b:
                 if static_result.schema_errors:
                     st.error("스키마 오류: " + ", ".join(static_result.schema_errors))
-                for c in static_result.conflicts:
-                    st.warning(f"[{c.get('conflict_type')}] {c.get('reason', '')}")
+                if static_result.conflicts:
+                    st.markdown("**충돌 상세:**")
+                    for c in static_result.conflicts:
+                        ctype = c.get("conflict_type", "")
+                        desc = _conflict_ko.get(ctype, f"[{ctype}]")
+                        reason = c.get("reason", "")
+                        st.warning(f"{desc}\n\n_{reason}_" if reason else desc)
+                if not static_result.schema_errors and not static_result.conflicts:
+                    st.markdown("문제 없음 — 기존 FlowRule과 충돌하지 않습니다.")
+
+            with st.expander("세부사항 (검증 결과 JSON)"):
+                st.json(pipeline_result["stage3"])
 
             s3_icon = "✅" if static_result.passed else "⚠️"
             s3.update(label=f"**Stage 3** — 정적 검증 {s3_icon}", state="complete")
@@ -494,7 +559,7 @@ if run_btn and intent.strip():
         if skip_twin:
             from stage4_twin.twin_verifier import TwinResult
             twin_result = TwinResult(status="skipped", reason="UI에서 스킵 선택")
-            st.info("⏭️ Digital Twin 검증 스킵")
+            st.info("⏭️ Digital Twin 검증 스킵\n\n사이드바에서 **Digital Twin 스킵** 토글을 해제하면 Mininet 가상 환경에서 FlowRule 동작을 실시간으로 검증합니다.")
             s4.update(label="**Stage 4** — Digital Twin 검증 ⏭️", state="complete")
         else:
             try:
@@ -523,16 +588,28 @@ if run_btn and intent.strip():
                         twin_result = verifier.verify(flowrule)
 
                     twin_summary = twin_result.summary()
+                    _check_ko = {
+                        "baseline_connectivity": "기본 연결성 — 플로우 설치 전 호스트 간 핑 통신 확인",
+                        "intent_check":          "인텐트 적용 — 실제 트래픽에서 의도한 동작(차단/전달) 확인",
+                        "regression":            "부작용 없음 — 다른 호스트 통신에 영향이 없는지 확인",
+                    }
+
                     if twin_result.status == "passed":
-                        st.success(twin_summary)
-                        for check, ok in twin_result.checks.items():
-                            st.write(f"{'✅' if ok else '❌'} {check}")
+                        st.success("Digital Twin 검증 통과 ✅")
                     elif twin_result.status == "failed":
-                        st.error(twin_summary)
-                        for check, ok in twin_result.checks.items():
-                            st.write(f"{'✅' if ok else '❌'} {check}")
+                        st.error("Digital Twin 검증 실패 ❌")
                     else:
                         st.warning(twin_summary)
+
+                    if twin_result.checks:
+                        st.markdown("**검증 항목:**")
+                        for check, ok in twin_result.checks.items():
+                            desc = _check_ko.get(check, check)
+                            st.markdown(f"{'✅' if ok else '❌'} {desc}")
+
+                    if twin_result.evidence:
+                        with st.expander("세부사항 (검증 증거)"):
+                            st.json(twin_result.evidence)
 
                     s4_icon = {"passed": "✅", "failed": "❌", "skipped": "⏭️", "error": "❌"}.get(
                         twin_result.status, "❓"
@@ -572,20 +649,30 @@ if run_btn and intent.strip():
             pipeline_result["stage5"] = xai_report.to_dict()
             pipeline_result["decision"] = decision
 
-            if decision == "APPROVE":
-                st.success(f"### ✅ {decision}")
-            elif decision == "APPROVE_WITHOUT_TWIN":
-                st.warning(f"### ⚠️ {decision}  (Digital Twin 미검증)")
+            _decision_label = {
+                "APPROVE":             ("✅", "승인 (APPROVE)", "success"),
+                "APPROVE_WITHOUT_TWIN": ("⚠️", "조건부 승인 (APPROVE_WITHOUT_TWIN)", "warning"),
+                "REJECT":              ("❌", "거부 (REJECT)", "error"),
+            }
+            d_icon, d_label, d_type = _decision_label.get(decision, ("❓", decision, "warning"))
+
+            if d_type == "success":
+                st.success(f"## {d_icon} {d_label}")
+            elif d_type == "error":
+                st.error(f"## {d_icon} {d_label}")
             else:
-                st.error(f"### ❌ {decision}")
+                st.warning(f"## {d_icon} {d_label}")
 
             st.markdown(f"**판정 근거:** {xai_report.decision_reason}")
 
-            with st.expander("단계별 요약"):
+            with st.expander("세부사항 (단계별 요약 및 XAI 보고서)"):
+                st.markdown("#### 단계별 요약")
                 st.markdown(f"- **인텐트 해석:** {xai_report.ir_summary}")
-                st.markdown(f"- **FlowRule:** {xai_report.flowrule_summary}")
+                st.markdown(f"- **FlowRule 생성:** {xai_report.flowrule_summary}")
                 st.markdown(f"- **정적 검증:** {xai_report.static_summary}")
                 st.markdown(f"- **Digital Twin:** {xai_report.twin_summary}")
+                st.markdown("#### XAI 보고서 JSON")
+                st.json(xai_report.to_dict())
 
             s5.update(label="**Stage 5** — XAI 설명 ✅", state="complete")
 
@@ -651,37 +738,162 @@ elif "last_pipeline_result" in st.session_state:
     result = st.session_state["last_pipeline_result"]
     st.divider()
     _dec = result.get("decision", "")
-    decision_icon = "✅" if _dec == "APPROVE" else ("⚠️" if _dec == "APPROVE_WITHOUT_TWIN" else "❌")
+    _decision_label_map = {
+        "APPROVE":              ("✅", "승인 (APPROVE)",              "success"),
+        "APPROVE_WITHOUT_TWIN": ("⚠️", "조건부 승인 (APPROVE_WITHOUT_TWIN)", "warning"),
+        "REJECT":               ("❌", "거부 (REJECT)",               "error"),
+    }
+    d_icon, d_label, d_type = _decision_label_map.get(_dec, ("❓", _dec or "-", "warning"))
+
     st.subheader(f"📋 최근 실행 결과  `{result.get('run_id', '')}`")
     st.caption(f"인텐트: {result.get('intent', '')}")
 
     col_d, col_r = st.columns([1, 3])
-    col_d.metric("판정", f"{decision_icon} {result.get('decision', '-')}")
-
+    col_d.metric("판정", f"{d_icon} {_dec or '-'}")
     s5_data = result.get("stage5", {})
     if s5_data and "decision_reason" in s5_data:
         col_r.info(f"**판정 근거:** {s5_data['decision_reason']}")
 
-    with st.expander("단계별 결과 보기"):
-        cols = st.columns(3)
-        for i, (stage, label) in enumerate([
-            ("stage1", "Stage1 IntentIR"),
-            ("stage2", "Stage2 FlowRule"),
-            ("stage3", "Stage3 정적검증"),
-        ]):
-            with cols[i]:
-                st.markdown(f"**{label}**")
-                st.json(result.get(stage, {}))
+    # ── Stage 1 복원 ─────────────────────────────────────────────
+    s1_data = result.get("stage1", {})
+    with st.expander("**Stage 1** — 인텐트 해석"):
+        if s1_data.get("status") == "rejected":
+            st.error(f"인텐트 거부 [{s1_data.get('rejection_reason')}]: {s1_data.get('rejection_detail', '')}")
+        elif s1_data:
+            _action_ko = {
+                "block": "🚫 차단 (Block)", "forward": "✅ 전달 (Forward)",
+                "qos": "⚡ QoS 처리", "sfc": "🔗 서비스 체인 (SFC)", "reroute": "🔀 경로 변경 (Reroute)",
+            }
+            tab_s, tab_j = st.tabs(["요약", "세부사항 (JSON)"])
+            with tab_s:
+                ca, cb = st.columns(2)
+                with ca:
+                    st.markdown(f"**동작:** {_action_ko.get(s1_data.get('action', ''), s1_data.get('action', '-'))}")
+                    st.markdown(f"**스위치:** {s1_data.get('device_hint', '-')}")
+                with cb:
+                    st.markdown("**트래픽 조건:**")
+                    parts = []
+                    if s1_data.get("src_ip"):   parts.append(f"출발지: `{s1_data['src_ip']}`")
+                    if s1_data.get("dst_ip"):   parts.append(f"목적지: `{s1_data['dst_ip']}`")
+                    if s1_data.get("ip_proto"): parts.append(f"프로토콜: {s1_data['ip_proto'].upper()}")
+                    if s1_data.get("dst_port"): parts.append(f"포트: {s1_data['dst_port']}")
+                    if s1_data.get("in_port"):  parts.append(f"입력 포트: {s1_data['in_port']}")
+                    for p in parts: st.markdown(f"  - {p}")
+                    if not parts: st.markdown("  - 전체 트래픽")
+            with tab_j:
+                st.json(s1_data)
 
-        cols2 = st.columns(3)
-        for i, (stage, label) in enumerate([
-            ("stage4", "Stage4 Digital Twin"),
-            ("stage5", "Stage5 XAI"),
-            ("stage6", "Stage6 배포"),
-        ]):
-            with cols2[i]:
-                st.markdown(f"**{label}**")
-                st.json(result.get(stage, {}))
+    # ── Stage 2 복원 ─────────────────────────────────────────────
+    s2_data = result.get("stage2", {})
+    with st.expander("**Stage 2** — FlowRule 컴파일"):
+        if s2_data:
+            _flows = s2_data.get("flows", [])
+            _flow = _flows[0] if _flows else {}
+            _criteria = _flow.get("selector", {}).get("criteria", [])
+            _instrs = _flow.get("treatment", {}).get("instructions", [])
+            _has_out = any(i.get("type") == "OUTPUT" for i in _instrs)
+            _dev_id = _flow.get("deviceId", "-")
+            _type_ko2 = {
+                "ETH_TYPE": "이더넷 타입", "IPV4_SRC": "출발지 IP",
+                "IPV4_DST": "목적지 IP", "IP_PROTO": "IP 프로토콜",
+                "TCP_DST": "TCP 목적지 포트", "TCP_SRC": "TCP 출발지 포트",
+                "UDP_DST": "UDP 목적지 포트", "IN_PORT": "입력 포트",
+                "VLAN_VID": "VLAN ID",
+            }
+            tab_s, tab_j = st.tabs(["요약", "세부사항 (JSON)"])
+            with tab_s:
+                ca, cb = st.columns(2)
+                with ca:
+                    st.markdown(f"**스위치:** {_dev_label(_dev_id) if _dev_id != '-' else '-'}  (`{_dev_id}`)")
+                    st.markdown(f"**우선순위:** {_flow.get('priority', '-')}")
+                    st.markdown(f"**동작:** {'🟢 전달 (FORWARD)' if _has_out else '🔴 차단 (DROP)'}")
+                with cb:
+                    st.markdown("**매칭 조건:**")
+                    for c in _criteria:
+                        t = c.get("type", "")
+                        val = c.get("ip") or c.get("ethType") or c.get("protocol") or c.get("tcpPort") or c.get("port") or "-"
+                        st.markdown(f"  - {_type_ko2.get(t, t)}: `{val}`")
+                    if not _criteria: st.markdown("  - 전체 트래픽 (조건 없음)")
+            with tab_j:
+                st.json(s2_data)
+
+    # ── Stage 3 복원 ─────────────────────────────────────────────
+    s3_data = result.get("stage3", {})
+    with st.expander("**Stage 3** — 정적 검증"):
+        if s3_data:
+            _conflict_ko2 = {
+                "shadowed":  "🔲 규칙 가림 (Shadowed) — 높은 우선순위 규칙이 덮어씁니다.",
+                "redundant": "♻️ 중복 규칙 (Redundant) — 동일한 효과의 규칙이 이미 존재합니다.",
+                "conflict":  "⚡ 규칙 충돌 (Conflict) — 동일 트래픽에 다른 동작이 지정되어 있습니다.",
+                "loop":      "🔄 포워딩 루프 (Loop) — 무한 순환 경로가 감지됩니다.",
+            }
+            tab_s, tab_j = st.tabs(["요약", "세부사항 (JSON)"])
+            with tab_s:
+                ca, cb = st.columns(2)
+                with ca:
+                    if s3_data.get("passed"): st.success("검증 통과 ✅")
+                    else: st.warning("검증 경고 ⚠️")
+                    st.markdown(f"**스키마 오류:** {len(s3_data.get('schema_errors', []))}건")
+                    st.markdown(f"**충돌 탐지:** {len(s3_data.get('conflicts', []))}건")
+                    st.markdown(f"**경고:** {len(s3_data.get('warnings', []))}건")
+                with cb:
+                    if s3_data.get("schema_errors"):
+                        st.error("스키마 오류: " + ", ".join(s3_data["schema_errors"]))
+                    for c in s3_data.get("conflicts", []):
+                        ctype = c.get("conflict_type", "")
+                        desc = _conflict_ko2.get(ctype, f"[{ctype}]")
+                        reason = c.get("reason", "")
+                        st.warning(f"{desc}\n\n_{reason}_" if reason else desc)
+                    if not s3_data.get("schema_errors") and not s3_data.get("conflicts"):
+                        st.markdown("문제 없음 — 기존 FlowRule과 충돌하지 않습니다.")
+            with tab_j:
+                st.json(s3_data)
+
+    # ── Stage 4 복원 ─────────────────────────────────────────────
+    s4_data = result.get("stage4", {})
+    with st.expander("**Stage 4** — Digital Twin 검증"):
+        if s4_data:
+            _check_ko2 = {
+                "baseline_connectivity": "기본 연결성 — 플로우 설치 전 호스트 간 핑 통신 확인",
+                "intent_check":          "인텐트 적용 — 실제 트래픽에서 의도한 동작(차단/전달) 확인",
+                "regression":            "부작용 없음 — 다른 호스트 통신에 영향이 없는지 확인",
+            }
+            tab_s, tab_j = st.tabs(["요약", "세부사항 (JSON)"])
+            with tab_s:
+                _s4_status = s4_data.get("status", "-")
+                if _s4_status == "passed":
+                    st.success("Digital Twin 검증 통과 ✅")
+                elif _s4_status == "failed":
+                    st.error("Digital Twin 검증 실패 ❌")
+                elif _s4_status == "skipped":
+                    st.info(f"⏭️ Digital Twin 검증 스킵 — {s4_data.get('reason', '')}")
+                else:
+                    st.warning(s4_data.get("summary", _s4_status))
+                for check, ok in s4_data.get("checks", {}).items():
+                    st.markdown(f"{'✅' if ok else '❌'} {_check_ko2.get(check, check)}")
+            with tab_j:
+                st.json(s4_data)
+
+    # ── Stage 5 복원 ─────────────────────────────────────────────
+    s5d = result.get("stage5", {})
+    with st.expander("**Stage 5** — XAI 설명"):
+        if s5d:
+            _dec5 = s5d.get("decision", "")
+            _di, _dl, _dt = _decision_label_map.get(_dec5, ("❓", _dec5, "warning"))
+            tab_s, tab_j = st.tabs(["요약", "세부사항 (JSON)"])
+            with tab_s:
+                if _dt == "success": st.success(f"## {_di} {_dl}")
+                elif _dt == "error": st.error(f"## {_di} {_dl}")
+                else: st.warning(f"## {_di} {_dl}")
+                if s5d.get("decision_reason"):
+                    st.markdown(f"**판정 근거:** {s5d['decision_reason']}")
+                st.markdown("---")
+                if s5d.get("ir_summary"):        st.markdown(f"- **인텐트 해석:** {s5d['ir_summary']}")
+                if s5d.get("flowrule_summary"):  st.markdown(f"- **FlowRule 생성:** {s5d['flowrule_summary']}")
+                if s5d.get("static_summary"):    st.markdown(f"- **정적 검증:** {s5d['static_summary']}")
+                if s5d.get("twin_summary"):      st.markdown(f"- **Digital Twin:** {s5d['twin_summary']}")
+            with tab_j:
+                st.json(s5d)
 
     log_json = json.dumps(result, ensure_ascii=False, indent=2, default=str)
     st.download_button(
