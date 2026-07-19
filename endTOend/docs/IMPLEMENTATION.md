@@ -644,3 +644,244 @@ LLM은 Stage 5에서 충돌 설명(why/impact/remedy) 생성에만 사용한다.
 자유 형식 LLM 설명은 실제 verifier 결과와 무관한 unsupported claim을 포함할 수 있다.
 각 설명 문장을 실제 stage 출력 데이터에 연결하는 evidence 구조를 쓰면
 설명의 신뢰도를 높이고 논문의 RQ6을 정량적으로 측정할 수 있다.
+
+---
+
+## 토폴로지 에디터 (`static/` — UI 기능)
+
+### 개요
+
+실제 OVS/ONOS 인프라 없이도 네트워크 토폴로지를 UI에서 직접 정의할 수 있는
+D3.js 기반 드래그앤드롭 에디터다. 사용자가 배치한 토폴로지는 파이프라인 전체에
+적용되며, ONOS가 오프라인 상태일 때 시각화 폴백으로도 동작한다.
+
+**배경:** 실제 SDN 스위치나 OVS 환경은 고가 장비 또는 별도 인프라가 필요하다.
+에디터를 통해 임의 토폴로지를 사전 정의하면 실제 장비 없이 다양한 실험이 가능하다.
+
+---
+
+### 아키텍처
+
+```
+[UI Edit Mode]
+  사용자 조작 (드래그/클릭)
+       │
+       ▼
+  editor state (app.js)
+  { nodes: [...], links: [...] }
+       │ POST /api/topology/custom
+       ▼
+  data/custom_topology.json  ←──── 영속 저장
+       │
+       ├──► GET /api/topology        → D3 시각화 (ONOS 폴백)
+       └──► _run_pipeline()          → NetworkTopology.from_custom_file()
+                                         └─ Stage 1~6 파이프라인에 반영
+```
+
+---
+
+### UI 구성 (`static/index.html`, `static/app.js`)
+
+#### 모드 전환
+
+우측 토폴로지 패널 헤더의 **Edit 버튼**으로 라이브 모드 ↔ 에디터 모드를 전환한다.
+
+| 라이브 모드 | 에디터 모드 |
+|------------|------------|
+| ONOS 토폴로지 자동 폴링 (1초) | 폴링 중단, 편집 캔버스 활성화 |
+| Refresh 배지 표시 | 툴바 + Properties 패널 표시 |
+| Metrics / Flow Table 표시 | Properties 패널로 교체 |
+
+모드 진입 시 `clearTopologyGraph()` 로 기존 D3 요소를 완전히 제거한 뒤
+해당 모드의 렌더링 함수를 호출한다. `fetchTopology()` 는 `editor.active` 가
+`true` 일 때 즉시 반환하여 라이브 업데이트가 에디터를 덮어쓰지 않도록 한다.
+
+#### 툴바 5개 도구
+
+| 아이콘 | 도구 | 동작 |
+|--------|------|------|
+| ↖ | Select | 노드 클릭으로 선택, 드래그로 이동 |
+| ⬡ | Switch | 캔버스 빈 공간 클릭 → 스위치 노드 배치 |
+| ◎ | Host | 캔버스 빈 공간 클릭 → 호스트 노드 배치 |
+| ╌ | Link | 노드 A 클릭 → 노드 B 클릭 → 링크 연결 |
+| ✕ | Delete | 노드/링크 클릭으로 삭제 |
+
+**Link 도구 Ghost Line:** 첫 번째 노드 클릭 후 마우스 이동 시 점선(`#ghost-link`)이
+커서를 따라 표시되어 연결 방향을 시각적으로 안내한다. 동일 노드 재클릭 또는
+빈 캔버스 클릭 시 취소된다. 동일 노드 쌍 중복 링크는 자동 방지된다.
+
+#### Properties 패널
+
+노드 선택 시 (Select 도구) 우측 하단에 속성 편집 폼이 나타난다.
+
+| 노드 종류 | 편집 가능 필드 |
+|-----------|--------------|
+| Switch | Label, DPID (16자리 hex) |
+| Host | Label, IP Address, MAC Address |
+| 공통 | 연결된 링크 목록 (대역폭 Mbps 수정, 링크 삭제) |
+
+모든 필드는 실시간으로 캔버스에 반영된다 (`input` 이벤트 → `renderEditorGraph()`).
+
+#### 기본 토폴로지
+
+Edit 모드 최초 진입 시 저장된 커스텀 토폴로지가 없으면
+**다이아몬드 4-스위치 토폴로지** (Diamond)를 기본값으로 로드한다.
+
+```
+h1(10.0.0.1) ─┐         ┌─ h3(10.0.0.3)
+               S1─(1M)─S2─(1M)─S4
+h2(10.0.0.2) ─┘  ╲(10M)╱      └─ h4(10.0.0.4)
+                   S3
+```
+
+스위치 자동 DPID: `0000000000000001` ~ `000000000000000N`
+호스트 자동 IP: `10.0.0.N`, MAC: `00:00:00:00:00:0N`
+
+#### Apply 동작
+
+**Apply** 클릭 시:
+1. `POST /api/topology/custom` 으로 현재 에디터 상태를 저장
+2. 현재 토폴로지 기반으로 **Example Chips 자동 갱신**
+   (호스트 IP와 스위치 번호를 읽어 Block / Forward / QoS 예시 인텐트 생성)
+3. 에디터 모드 종료 → 라이브 모드로 복귀
+4. `topoSnapshot = null` 로 즉시 재렌더 트리거
+
+---
+
+### D3.js 렌더링 분리
+
+기존 라이브 모드(`updateTopology`)와 에디터 모드(`renderEditorGraph`)는
+동일한 SVG를 공유하지만 선택자로 격리된다.
+
+| 구분 | 선택자 | 설명 |
+|------|--------|------|
+| 라이브 노드 | `g.live-node` | ONOS 실시간 데이터 |
+| 에디터 노드 | `g.ed-node` | 사용자 편집 데이터 |
+| 라이브 링크 | `line` (직접) | D3 join |
+| 에디터 링크 | `g.ed-link` | `<g>` 래퍼 + 히트 영역 포함 |
+
+모드 전환 시 `clearTopologyGraph()` 가 두 레이어를 모두 비운다.
+에디터의 D3 force simulation은 사용하지 않으며, 모든 노드가 `fx`/`fy` 고정 위치를 갖는다.
+드래그 시 `d.x`/`d.y` 를 직접 수정하고 `renderEditorGraph()` 를 재호출한다.
+
+---
+
+### 데이터 포맷 (`data/custom_topology.json`)
+
+```json
+{
+  "switches": [
+    { "id": "s1", "label": "S1", "dpid": "0000000000000001", "x": 116, "y": 95 },
+    { "id": "s2", "label": "S2", "dpid": "0000000000000002", "x":  96, "y": 180 }
+  ],
+  "hosts": [
+    { "id": "h1", "label": "H1", "ip": "10.0.0.1", "mac": "00:00:00:00:00:01", "x": 41, "y": 70 }
+  ],
+  "links": [
+    { "id": "l1", "source": "h1", "target": "s1", "bw": 100 },
+    { "id": "l5", "source": "s1", "target": "s2", "bw": 1 }
+  ]
+}
+```
+
+- `id`: 에디터 내부 식별자 (단순 문자열)
+- `dpid`: 16자리 hex, ONOS device_id 변환 시 `of:{dpid}` 형식
+- `bw`: 링크 대역폭 (Mbps), 캔버스에 레이블로 표시
+
+---
+
+### API 엔드포인트 (`api.py`)
+
+#### `GET /api/topology/custom`
+
+저장된 커스텀 토폴로지 JSON을 그대로 반환한다.
+파일이 없으면 빈 객체 `{}` 반환.
+
+#### `POST /api/topology/custom`
+
+에디터에서 Apply 시 호출된다. Request body를
+`data/custom_topology.json` 에 저장하고 `{"ok": true}` 반환.
+
+#### `GET /api/topology` (수정)
+
+ONOS 연결 실패 시 커스텀 토폴로지를 D3 포맷으로 변환하여 반환한다.
+
+변환 규칙 (`_custom_topo_as_d3`):
+- 스위치 노드 ID: `s1` → `of:0000000000000001`
+- 호스트 노드 ID: 그대로 유지 (`h1`)
+- 링크: 스위치 ID를 `of:` 포맷으로 치환
+- `_source: "custom"` 필드를 포함해 프론트엔드에서 구분 가능
+
+```
+ONOS 응답 정상 → ONOS 데이터 반환
+ONOS 오프라인 → custom_topology.json 존재 시 D3 변환 반환
+              → 파일 없으면 error 반환
+```
+
+---
+
+### 파이프라인 통합
+
+#### `_run_pipeline()` (api.py) 수정
+
+```python
+custom_topo = _load_custom_topology()
+topology = (
+    NetworkTopology.from_custom_file(custom_topo)
+    if custom_topo
+    else NetworkTopology.diamond()
+)
+```
+
+커스텀 토폴로지가 저장되어 있으면 그것을 사용하고,
+없으면 기존 Diamond 정적 토폴로지로 폴백한다.
+
+#### `NetworkTopology.from_custom_file()` (models/topology.py)
+
+커스텀 토폴로지 dict → `NetworkTopology` 변환 메서드.
+
+```python
+@classmethod
+def from_custom_file(cls, data: dict) -> "NetworkTopology":
+    hosts    = { h["id"]: h.get("ip", "") for h in data["hosts"] }
+    switches = { sw["id"]: f"of:{sw['dpid']}" for sw in data["switches"] }
+    # 링크에서 스위치별 포트 번호 순번 부여
+    for lnk in data["links"]:
+        for node_id in (lnk["source"], lnk["target"]):
+            if node_id in switches:
+                ports[switches[node_id]].append(port_counter[...] + 1)
+    return cls(hosts=hosts, switches=switches, ports=ports)
+```
+
+파이프라인의 토폴로지 그라운딩 (B-2), 인텐트 검증, 프롬프트 주입 모두
+커스텀 토폴로지 기반으로 동작한다.
+
+---
+
+### 설계 결정
+
+#### OVS 직접 읽기 대신 UI 에디터를 선택한 이유
+
+| 방식 | 장점 | 단점 |
+|------|------|------|
+| OVS 직접 읽기 | 실제 네트워크 반영 | 실제 SDN 스위치 또는 OVS 설치 필요, Windows 미지원 |
+| ONOS REST API | 자동 토폴로지 발견 | ONOS 실행 환경 필요 |
+| **UI 에디터 (선택)** | 환경 독립적, 즉시 실험 가능 | 수동 입력 필요 |
+
+논문 개발 단계에서 라즈베리파이나 실제 SDN 장비 없이 다양한 토폴로지를
+실험할 수 있다는 점에서 현실적인 접근이다. ONOS가 연결되면 라이브 모드로
+자동 전환되므로 실제 환경 연동 시 추가 수정 없이 사용 가능하다.
+
+#### D3 force simulation을 에디터에서 비활성화한 이유
+
+라이브 모드에서는 힘-지향 레이아웃이 자동 배치에 유용하지만,
+에디터에서는 사용자가 배치한 위치가 즉시 고정되어야 한다.
+simulation의 alpha decay로 위치가 계속 변하면 정밀한 배치가 불가능하다.
+에디터는 `fx`/`fy` 고정 좌표만 사용하고 simulation을 생략했다.
+
+#### 노드 선택자 분리 (`g.live-node` vs `g.ed-node`)
+
+모드 전환 없이 라이브 업데이트와 에디터가 동일 SVG를 공유할 경우,
+`selectAll('g')` 가 두 레이어를 모두 선택해 데이터 바인딩이 충돌할 수 있다.
+클래스로 명시적 격리하고 `clearTopologyGraph()` 로 전환 시 완전히 비움으로써
+레이어 간 간섭을 완전히 제거했다.

@@ -13,7 +13,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -127,7 +127,12 @@ def _run_pipeline(req: RunRequest, q: std_queue.Queue) -> None:
             progress(1, "데이터셋 없음 — RAG 스킵")
 
         from models.topology import NetworkTopology
-        topology = NetworkTopology.diamond()
+        custom_topo = _load_custom_topology()
+        topology = (
+            NetworkTopology.from_custom_file(custom_topo)
+            if custom_topo
+            else NetworkTopology.diamond()
+        )
 
         progress(1, "인텐트 파싱 중... (LLM 호출)")
         prediction = IntentParser(
@@ -365,8 +370,18 @@ def get_topology():
     try:
         from stage4_twin.onos_client import OnosClient
 
-        c = OnosClient()
+        c = OnosClient(timeout=2.0)  # short timeout — UI polls every second
         devices = c.devices() or []
+
+        # Fall back to custom topology when no device has an active OpenFlow connection.
+        # netcfg-pushed devices appear in the list but have available=False because
+        # Mininet is not running.  Only available=True devices represent a real topology.
+        available = [d for d in devices if d.get("available", False)]
+        if not available:
+            custom = _load_custom_topology()
+            if custom:
+                return _custom_topo_as_d3(custom)
+
         hosts_data = c.hosts() or []
         links_data = c.links() or []
         flows_data = c.flows() or []
@@ -452,7 +467,189 @@ def get_topology():
             "error": None,
         }
     except Exception as exc:
+        # ONOS offline — try custom topology
+        custom = _load_custom_topology()
+        if custom:
+            return _custom_topo_as_d3(custom)
         return {"nodes": [], "links": [], "flow_table": [], "rule_count": 0, "error": str(exc)}
+
+
+# ── Custom topology endpoints ─────────────────────────────────────────────────
+
+_CUSTOM_TOPO_PATH = _BASE_DIR / "data" / "custom_topology.json"
+
+
+def _load_custom_topology() -> dict | None:
+    if _CUSTOM_TOPO_PATH.exists():
+        try:
+            return json.loads(_CUSTOM_TOPO_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return None
+
+
+def _custom_topo_as_d3(data: dict) -> dict:
+    """Convert custom topology JSON → D3-compatible response."""
+    sw_map: dict[str, str] = {}  # simple_id → of:dpid
+    for sw in data.get("switches", []):
+        dpid = sw.get("dpid", "0" * 16)
+        sw_map[sw["id"]] = f"of:{dpid}"
+
+    nodes = [
+        {"id": sw_map[sw["id"]], "label": sw.get("label", sw["id"]),
+         "type": "switch", "state": "idle",
+         "x": sw.get("x"), "y": sw.get("y")}
+        for sw in data.get("switches", [])
+    ]
+    for h in data.get("hosts", []):
+        sw_id = next(
+            (sw_map.get(l["target"]) if l["source"] == h["id"] else sw_map.get(l["source"])
+             for l in data.get("links", [])
+             if l["source"] == h["id"] or l["target"] == h["id"]),
+            "",
+        )
+        nodes.append({
+            "id": h["id"], "label": h.get("label", h["id"]),
+            "type": "host", "ip": h.get("ip", ""), "switch": sw_id or "",
+            "x": h.get("x"), "y": h.get("y"),
+        })
+
+    seen: set = set()
+    links = []
+    for lnk in data.get("links", []):
+        src_d3 = sw_map.get(lnk["source"], lnk["source"])
+        tgt_d3 = sw_map.get(lnk["target"], lnk["target"])
+        k = tuple(sorted([src_d3, tgt_d3]))
+        if k not in seen:
+            seen.add(k)
+            links.append({"source": src_d3, "target": tgt_d3})
+
+    return {"nodes": nodes, "links": links, "flow_table": [], "rule_count": 0,
+            "_source": "custom"}
+
+
+@app.get("/api/topology/custom")
+def get_custom_topology():
+    data = _load_custom_topology()
+    return data if data else {}
+
+
+@app.post("/api/topology/custom")
+async def save_custom_topology(request: Request):
+    body = await request.json()
+    _CUSTOM_TOPO_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _CUSTOM_TOPO_PATH.write_text(
+        json.dumps(body, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+    return {"ok": True}
+
+
+def _build_netcfg(data: dict) -> dict:
+    """
+    custom_topology.json → ONOS Network Configuration 형식 변환.
+
+    ONOS netcfg 구조:
+      devices/<device-uri>/basic: { name, latitude, longitude, ... }
+      hosts/<mac>/<vlan>/basic: { name, ipAddresses, locations, ... }
+    """
+    devices: dict = {}
+    for sw in data.get("switches", []):
+        dpid = sw.get("dpid", "0" * 16)
+        uri = f"of:{dpid}"
+        devices[uri] = {
+            "basic": {
+                "name": sw.get("label", sw["id"]),
+                "driver": "ovs",
+                "managementAddress": "127.0.0.1",
+            }
+        }
+
+    # 스위치별 링크 순서로 포트 번호 계산 (Mininet 자동 포트 부여 방식과 동일)
+    from collections import defaultdict as _dd
+    _sw_ids_set = {sw["id"] for sw in data.get("switches", [])}
+    _sw_port_counter: dict = _dd(int)
+    _host_port: dict = {}  # (host_id, sw_simple_id) → port_number
+    for _lnk in data.get("links", []):
+        _src, _tgt = _lnk["source"], _lnk["target"]
+        if _src in _sw_ids_set:
+            _sw_port_counter[_src] += 1
+            if _tgt not in _sw_ids_set:
+                _host_port[(_tgt, _src)] = _sw_port_counter[_src]
+        if _tgt in _sw_ids_set:
+            _sw_port_counter[_tgt] += 1
+            if _src not in _sw_ids_set:
+                _host_port[(_src, _tgt)] = _sw_port_counter[_tgt]
+
+    hosts_cfg: dict = {}
+    for h in data.get("hosts", []):
+        mac = h.get("mac", "")
+        if not mac:
+            continue
+        # ONOS host key: <MAC>/<vlan>
+        key = f"{mac}/-1"
+        # Resolve connected switch
+        location = None
+        for lnk in data.get("links", []):
+            peer = None
+            if lnk["source"] == h["id"]:
+                peer = lnk["target"]
+            elif lnk["target"] == h["id"]:
+                peer = lnk["source"]
+            if peer:
+                peer_sw = next(
+                    (sw for sw in data.get("switches", []) if sw["id"] == peer), None
+                )
+                if peer_sw:
+                    dpid = peer_sw.get("dpid", "0" * 16)
+                    port = _host_port.get((h["id"], peer_sw["id"]), 1)
+                    location = {"elementId": f"of:{dpid}", "port": str(port)}
+                    break
+        cfg: dict = {"name": h.get("label", h["id"])}
+        if h.get("ip"):
+            cfg["ipAddresses"] = [h["ip"]]
+        if location:
+            cfg["locations"] = [location]
+        hosts_cfg[key] = {"basic": cfg}
+
+    return {"devices": devices, "hosts": hosts_cfg}
+
+
+@app.post("/api/topology/apply")
+async def apply_topology_to_onos(request: Request):
+    """
+    저장된 커스텀 토폴로지를 ONOS netcfg API로 푸시한다.
+    ONOS가 오프라인이면 오류를 반환하되, 저장된 파일은 유지한다.
+    """
+    # Save first (if body provided), else use existing file
+    try:
+        body = await request.json()
+    except Exception:
+        body = None
+
+    if body:
+        _CUSTOM_TOPO_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _CUSTOM_TOPO_PATH.write_text(
+            json.dumps(body, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        data = body
+    else:
+        data = _load_custom_topology()
+        if not data:
+            return {"ok": False, "error": "저장된 커스텀 토폴로지가 없습니다."}
+
+    netcfg = _build_netcfg(data)
+    try:
+        from stage4_twin.onos_client import OnosClient
+        OnosClient().push_netcfg(netcfg)
+        return {
+            "ok": True,
+            "pushed": {
+                "devices": len(netcfg.get("devices", {})),
+                "hosts": len(netcfg.get("hosts", {})),
+            },
+        }
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
 
 
 @app.get("/api/logs")
@@ -470,6 +667,19 @@ def get_logs():
         except Exception:
             continue
     return entries
+
+
+@app.delete("/api/logs")
+def clear_logs():
+    """로그 파일 전체 삭제 (히스토리 초기화)"""
+    deleted = 0
+    for f in config.LOGS_DIR.glob("*.json"):
+        try:
+            f.unlink()
+            deleted += 1
+        except Exception:
+            pass
+    return {"ok": True, "deleted": deleted}
 
 
 # ── Static files (must be last) ───────────────────────────────────────────────

@@ -191,6 +191,21 @@ class OnosClient:
         """포트별 통계 반환"""
         return self.request("GET", "statistics/ports").get("statistics", [])
 
+    def push_netcfg(self, payload: dict[str, Any]) -> None:
+        """
+        ONOS Network Configuration 푸시.
+        devices/hosts/links 설정을 ONOS에 반영한다.
+        실제 OpenFlow 연결 없이도 ONOS가 장치 메타데이터를 인식하게 된다.
+        """
+        self.request("POST", "network/configuration", payload)
+
+    def clear_netcfg(self) -> None:
+        """ONOS Network Configuration 초기화"""
+        try:
+            self.request("DELETE", "network/configuration")
+        except Exception:
+            pass
+
     def clear_app_flows(self, app_ids: list[str] | None = None) -> None:
         """특정 앱(또는 기본 앱)이 설치한 flow 전체 삭제"""
         if app_ids is None:
