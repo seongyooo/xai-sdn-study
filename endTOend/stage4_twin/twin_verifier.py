@@ -85,13 +85,22 @@ class TwinVerifier:
             return TwinResult(status="skipped", reason=skip_reason)
 
         from stage4_twin.onos_client import OnosClient, OnosError
-        from stage4_twin.topology import build_network, EXPECTED_DEVICE_IDS
+        from stage4_twin.topology import (
+            build_network, build_network_from_custom,
+            get_expected_device_ids, get_test_host_pairs,
+            EXPECTED_DEVICE_IDS,
+        )
 
         client = OnosClient(
             base_url=self.onos_url,
             username=self.onos_user,
             password=self.onos_password,
         )
+
+        # ── 커스텀 토폴로지 로드 ───────────────────────────
+        custom_data = self._load_custom_topology()
+        expected_ids = get_expected_device_ids(custom_data)
+        primary_pair, regression_pair = get_test_host_pairs(custom_data)
 
         # SFC 인텐트: waypoint 경유 테스트는 실제 방화벽 장치 없이 검증 불가 → skip
         if flowrule.get("sfc_chain"):
@@ -103,7 +112,6 @@ class TwinVerifier:
         # FlowRule에서 action 추출
         flows = flowrule.get("flows", [])
         flow = flows[0] if flows else {}
-        # OUTPUT instruction이 있으면 forward, 없으면 block(DROP/NOACTION)
         instructions = flow.get("treatment", {}).get("instructions", [])
         has_output = any(i.get("type") == "OUTPUT" for i in instructions)
         action = "forward" if has_output else "block"
@@ -118,21 +126,31 @@ class TwinVerifier:
             elif c["type"] == "IPV4_DST":
                 dst_ip = c.get("ip", "").split("/")[0]
 
-        # IP criteria가 없으면 테스트 대상 호스트를 특정할 수 없음 → skip
-        # (VLAN-only, port-only 등 IP 주소 없는 룰 모두 해당)
         if src_ip is None and dst_ip is None:
             return TwinResult(
                 status="skipped",
                 reason="FlowRule에 IPV4_SRC/IPV4_DST criteria가 없어 트래픽 검증 대상을 특정할 수 없음",
             )
 
-        # IP→호스트 매핑 (다이아몬드 토폴로지 기준)
-        ip_to_host = {
-            "10.0.0.1": "h1", "10.0.0.2": "h2",
-            "10.0.0.3": "h3", "10.0.0.4": "h4",
-        }
-        src_host = ip_to_host.get(src_ip or "", "h1")
-        dst_host = ip_to_host.get(dst_ip or "", "h4")
+        # IP→호스트 매핑 (커스텀 토폴로지 우선, 없으면 Diamond 기본값)
+        ip_to_host: dict[str, str] = {}
+        if custom_data:
+            for h in custom_data.get("hosts", []):
+                if h.get("ip"):
+                    ip_to_host[h["ip"]] = h["id"]
+        if not ip_to_host:
+            ip_to_host = {
+                "10.0.0.1": "h1", "10.0.0.2": "h2",
+                "10.0.0.3": "h3", "10.0.0.4": "h4",
+            }
+        src_host = ip_to_host.get(src_ip or "", primary_pair[0])
+        dst_host = ip_to_host.get(dst_ip or "", primary_pair[1])
+
+        # baseline ping 대상 IP (dst_host의 IP)
+        baseline_dst_ip = dst_ip or next(
+            (ip for ip, hid in ip_to_host.items() if hid == primary_pair[1]),
+            "10.0.0.4",
+        )
 
         net = None
         checks: dict = {}
@@ -144,7 +162,6 @@ class TwinVerifier:
             client.wait_until_ready(timeout=60.0)
 
             # ── 2. 필수 ONOS 앱 활성화 ────────────────────
-            # OpenFlow 앱이 꺼져 있으면 스위치가 ONOS에 연결되지 않음
             print("    [Twin] ONOS OpenFlow 앱 활성화 중...")
             for app in [
                 "org.onosproject.openflow-base",
@@ -154,7 +171,7 @@ class TwinVerifier:
                 try:
                     client.activate_application(app)
                 except Exception:
-                    pass  # 이미 활성화된 앱은 오류 무시
+                    pass
             time.sleep(2)
 
             # ── 3. 기존 flow 정리 ──────────────────────────
@@ -163,19 +180,29 @@ class TwinVerifier:
             time.sleep(1)
 
             # ── 4. Mininet 토폴로지 시작 ───────────────────
+            print("    [Twin] 잔존 Mininet 인터페이스 정리 중...")
+            subprocess.run(
+                ["mn", "-c"],
+                capture_output=True,
+                timeout=15,
+            )
+
             print("    [Twin] Mininet 토폴로지 시작 중...")
-            net = build_network(self.controller_ip, self.controller_port)
+            if custom_data:
+                print(f"    [Twin] 커스텀 토폴로지 사용 ({len(custom_data.get('switches',[]))}SW / {len(custom_data.get('hosts',[]))}H)")
+                net = build_network_from_custom(custom_data, self.controller_ip, self.controller_port)
+            else:
+                net = build_network(self.controller_ip, self.controller_port)
             net.start()
 
-            # 디바이스 연결 대기 (90초로 늘림 — 첫 연결은 오래 걸릴 수 있음)
             print("    [Twin] 디바이스 연결 대기 중...")
-            client.wait_for_devices(EXPECTED_DEVICE_IDS, timeout=90.0)
-            time.sleep(3)  # 프로액티브 flow 설치 대기
+            client.wait_for_devices(expected_ids, timeout=90.0)
+            time.sleep(3)
 
-            # ── 4. baseline 연결성 확인 ────────────────────
+            # ── 5. baseline 연결성 확인 ────────────────────
             print("    [Twin] baseline 연결성 확인 중...")
             baseline_ok, baseline_msg = self._ping_check(
-                net, "h1", "10.0.0.4", expect_reach=True
+                net, primary_pair[0], baseline_dst_ip, expect_reach=True
             )
             checks["baseline_connectivity"] = baseline_ok
             evidence["baseline_msg"] = baseline_msg
@@ -195,14 +222,16 @@ class TwinVerifier:
             # block이면 ping 실패, forward이면 ping 성공
             expect_reach = (action == "forward")
             intent_ok, intent_msg = self._ping_check(
-                net, src_host, dst_ip or "10.0.0.4", expect_reach=expect_reach
+                net, src_host, baseline_dst_ip, expect_reach=expect_reach
             )
             checks["intent_check"] = intent_ok
             evidence["intent_msg"] = intent_msg
 
-            # ── 7. 회귀 테스트 (h2↔h3) ───────────────────
+            # ── 7. 회귀 테스트 ───────────────────────────
+            host_to_ip = {hid: ip for ip, hid in ip_to_host.items()}
+            regression_dst_ip = host_to_ip.get(regression_pair[1], "10.0.0.3")
             regression_ok, regression_msg = self._ping_check(
-                net, "h2", "10.0.0.3", expect_reach=True
+                net, regression_pair[0], regression_dst_ip, expect_reach=True
             )
             checks["regression"] = regression_ok
             evidence["regression_msg"] = regression_msg
@@ -251,6 +280,11 @@ class TwinVerifier:
                     net.stop()
                 except Exception:
                     pass
+            # 인터페이스 완전 정리 (다음 실행 시 File exists 방지)
+            try:
+                subprocess.run(["mn", "-c"], capture_output=True, timeout=15)
+            except Exception:
+                pass
 
     def _ping_check(
         self,
@@ -305,6 +339,21 @@ class TwinVerifier:
 
         except Exception as exc:
             return False, f"ping 실행 오류: {exc}"
+
+    def _load_custom_topology(self) -> Optional[dict]:
+        """
+        data/custom_topology.json 로드. 없으면 None 반환.
+        UI 에디터에서 저장한 커스텀 토폴로지를 Digital Twin에 반영한다.
+        """
+        import json
+        from pathlib import Path
+        path = Path(__file__).resolve().parent.parent / "data" / "custom_topology.json"
+        if path.exists():
+            try:
+                return json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        return None
 
     @staticmethod
     def _check_platform() -> str:

@@ -12,7 +12,8 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, Union
+from pathlib import Path
 
 
 @dataclass
@@ -110,6 +111,40 @@ class NetworkTopology:
             pass  # 연결 실패 → 정적 토폴로지 폴백
 
         return cls.diamond()
+
+    @classmethod
+    def from_custom_file(cls, data: Union[dict, "Path", str]) -> "NetworkTopology":
+        """
+        UI 에디터에서 저장한 커스텀 토폴로지 dict (또는 JSON 파일 경로)로부터 생성.
+
+        Args:
+            data: custom_topology.json 내용 dict, 또는 파일 경로
+        """
+        import json as _json
+
+        if not isinstance(data, dict):
+            data = _json.loads(Path(data).read_text(encoding="utf-8"))
+
+        hosts: dict[str, str] = {
+            h["id"]: h.get("ip", "") for h in data.get("hosts", [])
+        }
+        switches: dict[str, str] = {
+            sw["id"]: f"of:{sw.get('dpid', '0' * 16)}"
+            for sw in data.get("switches", [])
+        }
+
+        # 포트 번호: 링크에서 스위치별 연결 수를 세어 1-based 순번 부여
+        from collections import defaultdict
+        port_counter: dict[str, int] = defaultdict(int)
+        ports: dict[str, list[int]] = {did: [] for did in switches.values()}
+        for lnk in data.get("links", []):
+            for node_id in (lnk["source"], lnk["target"]):
+                if node_id in switches:
+                    dev_id = switches[node_id]
+                    port_counter[dev_id] += 1
+                    ports[dev_id].append(port_counter[dev_id])
+
+        return cls(hosts=hosts, switches=switches, ports=ports)
 
     # ── 검증 메서드 ────────────────────────────────────────────────
 

@@ -544,3 +544,210 @@ body {
   border-radius: 50%;
   flex-shrink: 0;
 }
+
+/* ── Topology Editor ──────────────────────────────────────── */
+.topo-mode-btn {
+  font-size: 11px;
+  font-weight: 600;
+  font-family: 'Inter', sans-serif;
+  color: #9ca3af;
+  background: #111827;
+  border: 1px solid #374151;
+  border-radius: 6px;
+  padding: 3px 10px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+.topo-mode-btn:hover { border-color: #3b82f6; color: #f9fafb; }
+.topo-mode-btn.editing { border-color: #10b981; color: #10b981; }
+
+#topo-editor-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 18px;
+  border-bottom: 1px solid #1f2937;
+  flex-wrap: nowrap;
+}
+
+.tool-group {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.tool-btn {
+  width: 28px;
+  height: 28px;
+  background: #0a0e1a;
+  border: 1px solid #374151;
+  border-radius: 6px;
+  color: #9ca3af;
+  font-size: 13px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+  flex-shrink: 0;
+}
+.tool-btn:hover { border-color: #3b82f6; color: #f9fafb; }
+.tool-btn.active {
+  background: #1e3a5f;
+  border-color: #3b82f6;
+  color: #60a5fa;
+}
+
+.tool-hint {
+  flex: 1;
+  font-size: 10px;
+  font-family: 'JetBrains Mono', monospace;
+  color: #4b5563;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.topo-apply-btn {
+  font-size: 11px;
+  font-weight: 600;
+  font-family: 'Inter', sans-serif;
+  background: #065f46;
+  border: 1px solid #10b981;
+  border-radius: 6px;
+  color: #10b981;
+  padding: 4px 10px;
+  cursor: pointer;
+  transition: filter 0.15s;
+}
+.topo-apply-btn:hover { filter: brightness(1.2); }
+
+.topo-cancel-btn {
+  font-size: 11px;
+  font-weight: 600;
+  font-family: 'Inter', sans-serif;
+  background: #1c0f0f;
+  border: 1px solid #ef4444;
+  border-radius: 6px;
+  color: #ef4444;
+  padding: 4px 10px;
+  cursor: pointer;
+  transition: filter 0.15s;
+}
+.topo-cancel-btn:hover { filter: brightness(1.2); }
+
+/* Node properties panel */
+#topo-props-panel {
+  border-top: 1px solid #1f2937;
+  padding-top: 16px;
+}
+
+.props-hint {
+  font-size: 11px;
+  font-family: 'JetBrains Mono', monospace;
+  color: #374151;
+  text-align: center;
+  padding: 8px 0;
+}
+
+.props-field {
+  margin-bottom: 10px;
+}
+.props-field-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: #6b7280;
+  letter-spacing: 0.05em;
+  margin-bottom: 4px;
+  text-transform: uppercase;
+}
+.props-input {
+  width: 100%;
+  background: #0a0e1a;
+  border: 1px solid #1f2937;
+  border-radius: 6px;
+  padding: 6px 8px;
+  color: #f9fafb;
+  font-size: 12px;
+  font-family: 'JetBrains Mono', monospace;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.props-input:focus { border-color: #3b82f6; }
+
+.props-delete-btn {
+  width: 100%;
+  margin-top: 12px;
+  background: transparent;
+  border: 1px solid #374151;
+  border-radius: 6px;
+  color: #6b7280;
+  font-size: 11px;
+  font-family: 'Inter', sans-serif;
+  padding: 6px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+.props-delete-btn:hover { border-color: #ef4444; color: #ef4444; }
+
+.props-section-title {
+  font-size: 10px;
+  font-weight: 600;
+  color: #4b5563;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  margin: 14px 0 8px;
+  padding-top: 12px;
+  border-top: 1px solid #1f2937;
+}
+
+/* ── Topology Fullscreen ──────────────────────────────── */
+#topology-panel.fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  width: 100% !important;
+  height: 100%;
+  border-left: none;
+  overflow-y: auto;
+}
+#topology-panel.fullscreen #topology-graph {
+  flex: 1;
+  height: auto;
+  min-height: 0;
+  margin: 0 18px;
+}
+#topology-panel.fullscreen #topo-props-panel {
+  max-height: 220px;
+  overflow-y: auto;
+}
+#topology-panel.fullscreen #metrics-grid {
+  grid-template-columns: repeat(4, 1fr);
+}
+
+/* ── Lasso rect (shift+drag editor) ──────────────────── */
+#lasso-rect {
+  fill: rgba(239, 68, 68, 0.07);
+  stroke: #ef4444;
+  stroke-width: 1.5px;
+  stroke-dasharray: 5,3;
+  pointer-events: none;
+}
+
+/* custom topology badge on live mode */
+.custom-topo-badge {
+  font-size: 10px;
+  font-family: 'JetBrains Mono', monospace;
+  background: #0c2340;
+  border: 1px solid #1d4ed8;
+  color: #60a5fa;
+  border-radius: 4px;
+  padding: 2px 6px;
+}
